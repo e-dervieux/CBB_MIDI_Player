@@ -1,0 +1,5 @@
+*.MID
+*.MIDI
+*.SF2
+**/.DS_Store
+node_modules

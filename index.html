@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:image/png;base64,iVBORw0KGgo=">
+    <title>MIDI Player</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>CBB MIDI Player</h1>
+    </header>
+
+    <main class="app">
+      <section class="selectors">
+        <div class="selector">
+          <label for="midiInput" class="btn">Add MIDI files</label>
+          <input id="midiInput" type="file" accept=".mid,.midi,.mld,.mml,.mmi,.ms2mml,.mms" multiple hidden />
+        </div>
+        <div class="selector">
+          <label for="sf2Input">Load custom SF2</label>
+          <input id="sf2Input" type="file" accept=".sf2,.sf3" />
+        </div>
+        <div class="selector">
+          <label for="sf2Select">Choose SF2 (from Soundfonts/)</label>
+          <select id="sf2Select">
+            <option value="">— none —</option>
+          </select>
+          <button id="refreshSf2Btn" class="btn" title="Rescan Soundfonts">⟳</button>
+        </div>
+        <div class="selector">
+          <button id="testBeepBtn" class="btn" title="Play a 1s test tone">Audio Test</button>
+          <button id="testChordBtn" class="btn" title="Play a short MIDI test on piano">MIDI Test</button>
+        </div>
+      </section>
+
+      <section class="player">
+        <div class="transport">
+          <button id="prevBtn" title="Previous">⏮</button>
+          <button id="playPauseBtn" title="Play/Pause">▶️</button>
+          <button id="stopBtn" title="Stop">⏹</button>
+          <button id="nextBtn" title="Next">⏭</button>
+
+          <label class="inline" title="Autoplay next track">
+            <input type="checkbox" id="autoplayToggle" checked /> Autoplay
+          </label>
+
+          <label class="inline" title="Loop current track">
+            <input type="checkbox" id="loopToggle" /> Loop
+          </label>
+
+          <div class="volume">
+            <span>🔊</span>
+            <input id="volume" type="range" min="0" max="100" step="1" value="70" />
+          </div>
+        </div>
+
+        <div class="timeline">
+          <span id="currentTime">00:00</span>
+          <input id="seek" type="range" min="0" max="1000" step="1" value="0" />
+          <span id="totalTime">00:00</span>
+        </div>
+
+        <div class="now-playing">
+          <strong id="trackTitle">No track loaded</strong>
+        </div>
+      </section>
+
+      <section class="playlist">
+        <h2>Playlist</h2>
+        <ul id="playlist"></ul>
+      </section>
+    </main>
+
+    <!-- FluidSynth WASM loader (required by js-synthesizer) -->
+    <script src="node_modules/js-synthesizer/externals/libfluidsynth-2.4.6-with-libsndfile.js"></script>
+    <!-- js-synthesizer local browser bundle -->
+    <script src="node_modules/js-synthesizer/dist/js-synthesizer.js"></script>
+    <script src="synthesizer-player.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
+
+
