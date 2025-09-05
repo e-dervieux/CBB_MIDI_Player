@@ -1,8 +1,10 @@
 # CBB MIDI Player
 
+![image.png](player_pic.png)
+
 **⚠️   Disclaimer   ⚠️**
 
-CBB MIDI Player stands for *Crappy* Browser-Based MIDI Player. Crappy because I don't know anything about: web development, javascript (from which I stay as far as possible), the [FluidSynth](https://www.fluidsynth.org/) API, or the [js-synthesizer](https://github.com/jet2jet/js-synthesizer/tree/main) library. I achieved this by heavily relying on CursorAI with GPT-5, and trial and error smoke-testing. I did try to prompt the AI to make the app more robust, to comment its code, *etc.*, but the codebase *may* look like heresy for any expert in the field. Sorry about that.
+CBB MIDI Player stands for *Crappy* Browser-Based MIDI Player. Crappy because I don't know anything about: web development, javascript (from which I stay as far as possible), the [FluidSynth](https://www.fluidsynth.org/) API, or the [js-synthesizer](https://github.com/jet2jet/js-synthesizer/tree/main) library. I achieved this by heavily relying on CursorAI, and trial-and-error smoke-testing. I did try to prompt the AI to make the app more robust, to comment its code, *etc.*, but the codebase *may* look like heresy for any expert in the field. Sorry about that.
 
 Feel free to use it at your own risk. I made this mainly for fun, and to have a usable MIDI player at hand on any platform that runs locally and allowed me to use my own soundfonts without loading times (as opposed to many web-based MIDI players that can be found out there).
 
@@ -16,7 +18,7 @@ This player comes with the [Microsoft GS Wavetable Synth](https://web.archive.or
 ## Features
 - Playlist of local MIDI files (you can add multiple tracks at once)
 - Load SF2 from file or pick one from `Soundfonts/` dropdown (folder scan to automatically add SF2 files to the dropdown)
-- Timeline/seek, volume, Play/Pause/Stop
+- Timeline/seek, volume, Play/Pause/Stop/Rewind
 - Autoplay (plays next track when the current one ends) and Loop (loop on the current track if autoplay is disabled, or loop on all tracks if autoplay is enabled)
 - “Audio Test” (should play a 1 s test tone) and “MIDI Test” (should play a short MIDI test using a piano sound) buttons
 - Background-tab safe (will continue playing when the tab is in the background)
