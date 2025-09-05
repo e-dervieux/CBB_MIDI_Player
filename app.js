@@ -40,6 +40,7 @@
   const midiInput = document.getElementById('midiInput');
   const playlistEl = document.getElementById('playlist');
   const playPauseBtn = document.getElementById('playPauseBtn');
+  const rewindBtn = document.getElementById('rewindBtn');
   const stopBtn = document.getElementById('stopBtn');
   const prevBtn = document.getElementById('prevBtn');
   const nextBtn = document.getElementById('nextBtn');
@@ -63,6 +64,24 @@
   /** Log debug messages (safe in older browsers). */
   function debug(message, ...args) {
     try { console.log('[DEBUG]', message, ...args); } catch (_) {}
+  }
+
+  /** Debug tick state for end-detection issues. */
+  function debugTickState(label) {
+    try {
+      if (player && player._synth) {
+        const cur = player._synth.retrievePlayerCurrentTick();
+        const tot = player._synth.retrievePlayerTotalTicks();
+        const isPlayingFn = player._synth.isPlayerPlaying ? player._synth.isPlayerPlaying() : null;
+        Promise.all([cur, tot]).then(([current, total]) => {
+          console.log(`[TICK_DEBUG] ${label}: synth_current=${current}, synth_total=${total}, synth_playing=${isPlayingFn}, app_currentTick=${currentTick}, app_totalTicks=${totalTicks}, isPlaying=${isPlaying}`);
+        });
+      } else {
+        console.log(`[TICK_DEBUG] ${label}: no synth, app_currentTick=${currentTick}, app_totalTicks=${totalTicks}, isPlaying=${isPlaying}`);
+      }
+    } catch(e) {
+      console.log(`[TICK_DEBUG] ${label}: error:`, e);
+    }
   }
 
   /**
@@ -138,7 +157,11 @@
             if (!isPlaying || !player || !player._synth) return;
             const reachedEnd = (totalTicks > 0 && currentTick >= totalTicks - 1);
             const synthStopped = (typeof player._synth.isPlayerPlaying === 'function' && !player._synth.isPlayerPlaying());
-            if (reachedEnd || synthStopped) onEnded();
+            if (reachedEnd || synthStopped) {
+              debugTickState('heartbeat end detected');
+              debugTickState('onEnded triggered from heartbeat');
+              onEnded();
+            }
           } catch(_) {}
         });
       }
@@ -154,9 +177,12 @@
   /** Update timer labels and slider; keeps currentTick in sync while playing. */
   async function updateTimeline() {
     if (!player) return;
+    const oldTick = currentTick;
     // When playing, keep internal currentTick in sync with synth
     if (isPlaying && player._synth && player._synth.retrievePlayerCurrentTick) {
-      try { currentTick = await player._synth.retrievePlayerCurrentTick(); } catch (_) {}
+      try {
+        currentTick = await player._synth.retrievePlayerCurrentTick();
+      } catch (_) {}
     }
     // Lazy-load total/tempo (first-play guard)
     if (totalTicks === 0 && player && player._synth) {
@@ -216,7 +242,13 @@
       try {
         const reachedEnd = (totalTicks > 0 && currentTick >= totalTicks - 1);
         const synthStopped = (player && player._synth && typeof player._synth.isPlayerPlaying === 'function' && !player._synth.isPlayerPlaying());
-        if (isPlaying && (reachedEnd || synthStopped)) onEnded();
+        if (reachedEnd || synthStopped) {
+          debugTickState('uiLoop end detected');
+        }
+        if (isPlaying && (reachedEnd || synthStopped)) {
+          debugTickState('onEnded triggered from uiLoop');
+          onEnded();
+        }
       } catch (_) {}
       uiLoop._last = now;
     }
@@ -262,10 +294,13 @@
   async function playTrack() {
     await ensurePlayer();
     if (!player || currentIndex < 0) return;
+    debugTickState('playTrack start');
     debug('Play requested at index', currentIndex, 'title:', trackTitleEl.textContent);
     // Sync synth to our internal position first
     try { if (typeof player.seek === 'function') player.seek(currentTick); } catch (_) {}
+    debugTickState('after seek');
     player.play();
+    debugTickState('after play');
     isPlaying = true;
     playPauseBtn.textContent = '⏸';
     // Ensure audio graph is active and heartbeat enabled while playing
@@ -299,7 +334,32 @@
     debug('Stop requested');
     if (typeof player.pause === 'function') player.pause();
     currentTick = 0;
-    if (typeof player.seek === 'function') player.seek(0);
+    if (typeof player.seek === 'function') {
+      // When track ends, player may be in "ended" state - try to restart it cleanly
+      try {
+        if (player._synth && player._lastSmfBytes) {
+          // Stop and reset to clear "ended" state, then reload SMF data
+          if (typeof player._synth.stopPlayer === 'function') {
+            player._synth.stopPlayer();
+          }
+          if (typeof player._synth.resetPlayer === 'function') {
+            await player._synth.resetPlayer();
+          }
+          // Reload the SMF data to restart from clean state
+          await player._synth.addSMFDataToPlayer(player._lastSmfBytes);
+          // Now seek to 0 should work
+          if (typeof player._synth.seekPlayer === 'function') {
+            player._synth.seekPlayer(0);
+          }
+        } else {
+          // Fallback to simple seek if we don't have cached bytes
+          player.seek(0);
+        }
+      } catch(e) {
+        debug('Error restarting player, using fallback:', e);
+        player.seek(0);
+      }
+    }
     isPlaying = false;
     playPauseBtn.textContent = '▶️';
     // Reflect instantly in UI
@@ -322,6 +382,29 @@
     else {
       if (currentIndex === -1 && getTrackCount() > 0) await loadTrack(0);
       playTrack();
+    }
+  }
+
+  /** Seek to the beginning of the current track without changing play state. */
+  async function rewindToBeginning() {
+    await ensurePlayer();
+    if (!player || currentIndex === -1) return;
+    debug('Rewind to beginning requested');
+    try {
+      // Prefer underlying synth seek when available for reliability
+      if (player._synth && typeof player._synth.seekPlayer === 'function') {
+        player._synth.seekPlayer(0);
+      }
+      if (typeof player.seek === 'function') {
+        await player.seek(0);
+      }
+      currentTick = 0;
+      // Update UI immediately
+      const spt = secPerTick();
+      currentTimeEl.textContent = formatTimeStr(0);
+      seekEl.value = '0';
+    } catch (e) {
+      debug('Error seeking to beginning:', e);
     }
   }
 
@@ -547,6 +630,7 @@
 
   // Transport buttons
   playPauseBtn.addEventListener('click', togglePlayPause);
+  rewindBtn.addEventListener('click', rewindToBeginning);
   stopBtn.addEventListener('click', stopTrack);
   prevBtn.addEventListener('click', prevTrack);
   nextBtn.addEventListener('click', nextTrack);

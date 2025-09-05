@@ -111,6 +111,8 @@
      */
     async loadMIDI(bytes){
       while (!this._ready) { await new Promise(r=>setTimeout(r,10)); }
+      // Cache the bytes for potential restart after track ends
+      this._lastSmfBytes = bytes.slice();
       // Reset internal player to ensure only the new track is queued
       try { this._synth.stopPlayer(); } catch(_) {}
       try { await this._synth.resetPlayer(); } catch(_) {}
