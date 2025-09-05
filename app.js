@@ -147,7 +147,9 @@
       let guard = 0;
       while (!player._ready && guard < 500) { await new Promise((res) => setTimeout(res, 10)); guard++; }
       debug('JSSynthPlayer ready');
-      if (player._gain) player._gain.gain.value = 0.7;
+      // Set initial volume from slider
+      const initial = Number(volumeEl.value) / 100;
+      if (player._gain) player._gain.gain.value = initial;
       // UI loop will start on first play to reduce idle CPU
       // Subscribe to audio heartbeat so onEnded triggers in background tabs
       if (typeof player.setOnAudioTick === 'function') {

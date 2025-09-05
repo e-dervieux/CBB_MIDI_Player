@@ -6,6 +6,10 @@
 (function(){
   'use strict';
 
+  // Constants
+  const DEFAULT_GAIN = 0.7;           // WebAudio gain (0.0 to 1.0)
+  const FLUIDSYNTH_GAIN = 5.0;        // FluidSynth internal gain (0.0 to 10.0)
+
   /**
    * JSSynthPlayer
    * Adapter around js-synthesizer (FluidSynth WASM) exposing a compact API used by app.js.
@@ -16,7 +20,7 @@
       // WebAudio pipeline ------------------------------------------------------
       this._audioContext = new (window.AudioContext || window.webkitAudioContext)();
       this._gain = this._audioContext.createGain();
-      this._gain.gain.value = 0.7;
+      this._gain.gain.value = DEFAULT_GAIN;
       this._gain.connect(this._audioContext.destination);
 
       // Synth state ------------------------------------------------------------
@@ -61,6 +65,10 @@
       // Create main synth + node
       this._synth = new JSSynth.Synthesizer();
       this._synth.init(this._audioContext.sampleRate);
+      // Set FluidSynth internal gain for proper volume levels
+      if (typeof this._synth.setGain === 'function') {
+        this._synth.setGain(FLUIDSYNTH_GAIN);
+      }
       this._node = this._synth.createAudioNode(this._audioContext, 2048);
       this._node.connect(this._gain);
       this._nodeConnected = true;
@@ -150,6 +158,10 @@
       await JSSynth.waitForReady();
       this._testSynth = new JSSynth.Synthesizer();
       this._testSynth.init(this._audioContext.sampleRate);
+      // Set FluidSynth internal gain for test synth too
+      if (typeof this._testSynth.setGain === 'function') {
+        this._testSynth.setGain(FLUIDSYNTH_GAIN);
+      }
       this._testNode = this._testSynth.createAudioNode(this._audioContext, 1024);
       this._testNode.connect(this._gain);
       await this._testSynth.loadSFont(this._sfontBytes);
