@@ -706,7 +706,10 @@
       } catch (e) {
         console.error('Test chord failed', e);
       } finally {
-        if (sf2Input && sf2Input.files && sf2Input.files.length > 0) { testChordBtn.disabled = false; }
+        // Re-enable button if any SF2 is loaded (via file input or dropdown)
+        const hasSf2File = sf2Input && sf2Input.files && sf2Input.files.length > 0;
+        const hasSf2Dropdown = sf2Select && sf2Select.value && sf2Select.value !== '';
+        if (hasSf2File || hasSf2Dropdown) { testChordBtn.disabled = false; }
       }
     });
   }
