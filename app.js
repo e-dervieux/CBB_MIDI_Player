@@ -10,11 +10,20 @@
   // ---------------------------------------------------------------------------
   // Constants / Config
   // ---------------------------------------------------------------------------
-  const UI_UPDATE_INTERVAL_MS = 50; // ~20 fps timeline updates
+  const UI_UPDATE_INTERVAL_MS = 50;     // ~20 fps timeline updates
   const DEFAULT_TEMPO_US_PER_QUARTER = 500000; // 120 BPM
-  const DEFAULT_PPQ = 480;
-  const PAUSE_LOW_POWER_MS = 30000; // 30s to fully suspend when paused
+  const DEFAULT_PPQ = 480;              // PPQ = Pulses Per Quarter note (MIDI tick resolution)
+  const PAUSE_LOW_POWER_MS = 30000;     // 30s to fully suspend when paused
   const SUPPORTED_MIDI_EXTENSIONS = ['mid', 'midi', 'mld', 'mml', 'mmi', 'ms2mml', 'mms'];
+  const SEEK_SLIDER_MAX = 1000;         // range max for seek slider
+  const TEST_BEEP_DURATION_MS = 1000;   // test beep duration
+  const AUDIO_STATE = Object.freeze({
+    playing: 'playing',   // full pipeline active (context resumed, main + heartbeat connected)
+    paused: 'paused',     // playback stopped but graph kept warm for instant resume
+    stopped: 'stopped',   // minimize CPU (disconnect nodes, optionally suspend context)
+    lowPower: 'lowPower', // like stopped; entered after idle pause timeout for battery savings
+    wakeUp: 'wakeUp'      // transient state to quickly resume context and reconnect nodes
+  });
 
   // ---------------------------------------------------------------------------
   // App State
@@ -25,12 +34,59 @@
   let isPlaying = false;   // transport state (true while playing)
   let autoplay = true;     // autoplay toggle state
 
-  // Transport timing is driven by these variables
-  let currentTick = 0;                 // source of truth for playhead
-  let totalTicks = 0;                  // track length in ticks
-  let tempoUsPerQuarter = DEFAULT_TEMPO_US_PER_QUARTER; // last known tempo
-  let currentPPQ = DEFAULT_PPQ;        // PPQ from SMF header (division)
+  // ---------------------------------------------------------------------------
+  // Timing State Management
+  // ---------------------------------------------------------------------------
+  class TimingState {
+    constructor() {
+      this.currentTick = 0;                 // source of truth for playhead
+      this.totalTicks = 0;                  // track length in ticks
+      this.tempoUsPerQuarter = DEFAULT_TEMPO_US_PER_QUARTER; // last known tempo
+      this.ppq = DEFAULT_PPQ;               // PPQ from SMF header (division)
+    }
+
+    /** Reset to default values (used when loading new track). */
+    reset() {
+      this.currentTick = 0;
+      this.totalTicks = 0;
+      this.tempoUsPerQuarter = DEFAULT_TEMPO_US_PER_QUARTER;
+      this.ppq = DEFAULT_PPQ;
+      this.secPerTick = 0;
+      this.setSecPerTick();
+    }
+
+    /** Update timing from synth values. */
+    updateFromSynth(totalTicks, tempoUsPerQuarter, ppq = this.ppq) {
+      if (typeof totalTicks === 'number' && totalTicks > 0) this.totalTicks = totalTicks;
+      if (typeof tempoUsPerQuarter === 'number' && tempoUsPerQuarter > 0) this.tempoUsPerQuarter = tempoUsPerQuarter;
+      if (typeof ppq === 'number' && ppq > 0) this.ppq = ppq;
+      this.setSecPerTick();
+    }
+
+    /** Calculate seconds per tick based on current tempo and PPQ. */
+    setSecPerTick() {
+      this.secPerTick = (this.tempoUsPerQuarter / 1e6) / this.ppq;
+    }
+
+    /** Convert ticks to seconds. */
+    ticksToSeconds(ticks) {
+      return ticks * this.secPerTick;
+    }
+
+    /** Convert seconds to ticks. */
+    secondsToTicks(seconds) {
+      return seconds / this.secPerTick;
+    }
+
+    /** Clamp currentTick to valid range. */
+    clampTick() {
+      this.currentTick = Math.max(0, Math.min(this.currentTick, this.totalTicks));
+    }
+  }
+
+  const timing = new TimingState();
   let rafId = 0;           // UI loop handle
+  let suppressFirstSynthRead = false; // Skip one synth tick read on play to avoid flicker
   let lastUi = { cur: '', tot: '', seek: '' };
   let pauseLowPowerTimer = 0;
 
@@ -56,14 +112,67 @@
   const refreshSf2Btn = document.getElementById('refreshSf2Btn');
   const testBeepBtn = document.getElementById('testBeepBtn');
   const testChordBtn = document.getElementById('testChordBtn');
-  if (testChordBtn) { try { testChordBtn.disabled = true; } catch(_){} }
+  if (testChordBtn) { 
+    try { 
+      testChordBtn.disabled = true; 
+    } catch (error) {
+      console.error('[ERROR] Failed to disable test chord button:', error);
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Utilities
   // ---------------------------------------------------------------------------
-  /** Log debug messages (safe in older browsers). */
+  /** Log debug messages */
   function debug(message, ...args) {
-    try { console.log('[DEBUG]', message, ...args); } catch (_) {}
+    console.log('[DEBUG]', message, ...args); 
+  }
+
+  /** Set play/pause button icon and aria-label consistently. */
+  function setPlayPauseIcon(isPlayingState) {
+    try {
+      if (!playPauseBtn) return;
+      playPauseBtn.textContent = isPlayingState ? '⏸️' : '▶️';
+      playPauseBtn.setAttribute('title', isPlayingState ? 'Pause' : 'Play');
+    } catch (error) {
+      console.error('[ERROR] Failed to set play/pause icon:', error);
+    }
+  }
+
+  /** Safely call a player method with error handling. */
+  function safePlayerCall(method, ...args) {
+    try {
+      if (player && typeof method === 'function') {
+        return method.apply(player, args);
+      }
+    } catch (error) {
+      console.error('[ERROR] Failed to call player method:', error);
+    }
+  }
+
+  /** Safely call a synth method with error handling. */
+  async function safeSynthCall(method, ...args) {
+    try {
+      if (player && player._synth && typeof method === 'function') {
+        return await method.apply(player._synth, args);
+      }
+    } catch (error) {
+      console.error('[ERROR] Failed to call synth method:', error);
+    }
+    return null;
+  }
+
+  /** Safely clear a timeout with error handling. */
+  function safeClearTimeout(timerId, errorContext = 'timer') {
+    try {
+      if (timerId) {
+        clearTimeout(timerId);
+        return 0;
+      }
+    } catch (error) {
+      console.error(`[ERROR] Failed to clear ${errorContext}:`, error);
+    }
+    return 0;
   }
 
   /** Debug tick state for end-detection issues. */
@@ -74,10 +183,10 @@
         const tot = player._synth.retrievePlayerTotalTicks();
         const isPlayingFn = player._synth.isPlayerPlaying ? player._synth.isPlayerPlaying() : null;
         Promise.all([cur, tot]).then(([current, total]) => {
-          console.log(`[TICK_DEBUG] ${label}: synth_current=${current}, synth_total=${total}, synth_playing=${isPlayingFn}, app_currentTick=${currentTick}, app_totalTicks=${totalTicks}, isPlaying=${isPlaying}`);
+          console.log(`[TICK_DEBUG] ${label}: synth_current=${current}, synth_total=${total}, synth_playing=${isPlayingFn}, app_currentTick=${timing.currentTick}, app_totalTicks=${timing.totalTicks}, isPlaying=${isPlaying}`);
         });
       } else {
-        console.log(`[TICK_DEBUG] ${label}: no synth, app_currentTick=${currentTick}, app_totalTicks=${totalTicks}, isPlaying=${isPlaying}`);
+        console.log(`[TICK_DEBUG] ${label}: no synth, app_currentTick=${timing.currentTick}, app_totalTicks=${timing.totalTicks}, isPlaying=${isPlaying}`);
       }
     } catch(e) {
       console.log(`[TICK_DEBUG] ${label}: error:`, e);
@@ -99,18 +208,60 @@
     return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
   }
 
-  /** Seconds per tick from current tempo and PPQ. */
-  function secPerTick() {
-    const ppq = currentPPQ || DEFAULT_PPQ;
-    const usPerQuarter = tempoUsPerQuarter || DEFAULT_TEMPO_US_PER_QUARTER;
-    return (usPerQuarter / 1e6) / ppq;
-  }
-
   // Playlist helpers
   /** @returns {number} number of tracks in playlist */
   function getTrackCount() { return playlist.length; }
   /** @returns {boolean} true if exactly one track */
   function hasSingleTrack() { return getTrackCount() === 1; }
+  /** Create a playlist list item with actions and wiring. */
+  function createPlaylistItem(name) {
+    const listItem = document.createElement('li');
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'title';
+    titleSpan.textContent = name;
+    const actionsContainer = document.createElement('span');
+    const playButton = document.createElement('button');
+    playButton.textContent = 'Play';
+    playButton.addEventListener('click', async () => {
+      try {
+        const indexInList = [...playlistEl.children].indexOf(listItem);
+        await loadTrack(indexInList);
+        playTrack();
+      } catch (error) {
+        console.error('[ERROR] Failed to play track from playlist:', error);
+      }
+    });
+    const removeButton = document.createElement('button');
+    removeButton.textContent = '✕';
+    removeButton.title = 'Remove';
+    removeButton.addEventListener('click', () => {
+      const indexInList = [...playlistEl.children].indexOf(listItem);
+      if (indexInList === currentIndex) {
+        stopTrack();
+        currentIndex = -1;
+        trackTitleEl.textContent = 'No track loaded';
+      } else if (indexInList < currentIndex) {
+        currentIndex -= 1;
+      }
+      playlist.splice(indexInList, 1);
+      listItem.remove();
+      highlightActive();
+    });
+    actionsContainer.appendChild(playButton);
+    actionsContainer.appendChild(removeButton);
+    listItem.appendChild(titleSpan);
+    listItem.appendChild(actionsContainer);
+    listItem.addEventListener('dblclick', async () => {
+      try {
+        const indexInList = [...playlistEl.children].indexOf(listItem);
+        await loadTrack(indexInList);
+        playTrack();
+      } catch (error) {
+        console.error('[ERROR] Failed to play track from double-click:', error);
+      }
+    });
+    return listItem;
+  }
   /**
    * Next index when advancing due to player end.
    * Honors Loop and Autoplay; returns null when stopping.
@@ -143,9 +294,10 @@
     if (!player) {
       debug('Initializing JSSynthPlayer');
       player = new window.JSSynthPlayer();
-      // Wait until adapter reports ready
-      let guard = 0;
-      while (!player._ready && guard < 500) { await new Promise((res) => setTimeout(res, 10)); guard++; }
+      // Wait until adapter reports ready (adapter-provided readiness)
+      if (typeof player.waitForReady === 'function') {
+        await player._waitForReady();
+      }
       debug('JSSynthPlayer ready');
       // Set initial volume from slider
       const initial = Number(volumeEl.value) / 100;
@@ -155,16 +307,7 @@
       if (typeof player.setOnAudioTick === 'function') {
         player.setOnAudioTick(() => {
           // Fast end detection without rAF
-          try {
-            if (!isPlaying || !player || !player._synth) return;
-            const reachedEnd = (totalTicks > 0 && currentTick >= totalTicks - 1);
-            const synthStopped = (typeof player._synth.isPlayerPlaying === 'function' && !player._synth.isPlayerPlaying());
-            if (reachedEnd || synthStopped) {
-              debugTickState('heartbeat end detected');
-              debugTickState('onEnded triggered from heartbeat');
-              onEnded();
-            }
-          } catch(_) {}
+          checkForTrackEnd('heartbeat');
         });
       }
     }
@@ -174,86 +317,100 @@
   async function waitForSynthReady(maxMs = 8000) { await ensurePlayer(); return true; }
 
   // ---------------------------------------------------------------------------
+  // End-of-track detection
+  // ---------------------------------------------------------------------------
+  /** Check if track has ended and trigger onEnded if needed. */
+  function checkForTrackEnd(context = 'unknown') {
+    try {
+      if (!isPlaying || !player || !player._synth) return;
+      
+      const reachedEnd = (timing.totalTicks > 0 && timing.currentTick >= timing.totalTicks - 1);
+      const synthStopped = (typeof player._synth.isPlayerPlaying === 'function' && !player._synth.isPlayerPlaying());
+      
+      if (reachedEnd || synthStopped) {
+        debugTickState(`${context} end detected`);
+        debugTickState(`onEnded triggered from ${context}`);
+        onEnded();
+      }
+    } catch (error) {
+      console.error(`[ERROR] End detection failed in ${context}:`, error);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Timeline update loop
   // ---------------------------------------------------------------------------
   /** Update timer labels and slider; keeps currentTick in sync while playing. */
   async function updateTimeline() {
     if (!player) return;
-    const oldTick = currentTick;
+    const oldTick = timing.currentTick;
     // When playing, keep internal currentTick in sync with synth
-    if (isPlaying && player._synth && player._synth.retrievePlayerCurrentTick) {
-      try {
-        currentTick = await player._synth.retrievePlayerCurrentTick();
-      } catch (_) {}
+    if (isPlaying) {
+      if (suppressFirstSynthRead) {
+        // Use current state for this frame; clear guard (avoids flicker on play after seek)
+        suppressFirstSynthRead = false;
+      } else {
+        const tick = await safeSynthCall(player._synth?.retrievePlayerCurrentTick);
+        if (tick !== null) timing.currentTick = tick;
+      }
     }
     // Lazy-load total/tempo (first-play guard)
-    if (totalTicks === 0 && player && player._synth) {
-      try {
-        const tt = await player._synth.retrievePlayerTotalTicks();
-        if (typeof tt === 'number' && tt > 0) totalTicks = tt;
-        const t = await player._synth.retrievePlayerMIDITempo();
-        if (typeof t === 'number' && t > 0) tempoUsPerQuarter = t;
-      } catch (_) {}
+    if (timing.totalTicks === 0) {
+      const totalTicks = await safeSynthCall(player._synth?.retrievePlayerTotalTicks);
+      const tempoUsPerQuarter = await safeSynthCall(player._synth?.retrievePlayerMIDITempo);
+      timing.updateFromSynth(totalTicks, tempoUsPerQuarter);
     }
-    const spt = secPerTick();
-    const curStr = formatTimeStr(currentTick * spt);
-    const totStr = formatTimeStr(totalTicks * spt);
-    const seekStr = totalTicks > 0 ? String(Math.round((currentTick / totalTicks) * 1000)) : '0';
-    if (curStr !== lastUi.cur) { currentTimeEl.textContent = curStr; lastUi.cur = curStr; }
-    if (totStr !== lastUi.tot) { totalTimeEl.textContent = totStr; lastUi.tot = totStr; }
-    if (seekStr !== lastUi.seek) { seekEl.value = seekStr; lastUi.seek = seekStr; }
+    // Calculate UI strings only once
+    const curStr = formatTimeStr(timing.ticksToSeconds(timing.currentTick));
+    const totStr = formatTimeStr(timing.ticksToSeconds(timing.totalTicks));
+    const seekStr = timing.totalTicks > 0 ? Math.round((timing.currentTick / timing.totalTicks) * SEEK_SLIDER_MAX).toString() : '0';
+    
+    // Update DOM only when values actually change (efficient string comparison)
+    if (curStr !== lastUi.cur) { 
+      currentTimeEl.textContent = curStr; 
+      lastUi.cur = curStr; 
+    }
+    if (totStr !== lastUi.tot) { 
+      totalTimeEl.textContent = totStr; 
+      lastUi.tot = totStr; 
+    }
+    if (seekStr !== lastUi.seek) { 
+      seekEl.value = seekStr; 
+      lastUi.seek = seekStr; 
+    }
   }
 
   /** After PAUSE_LOW_POWER_MS, fully suspend/disable audio while paused. */
   function schedulePauseLowPower() {
-    try { if (pauseLowPowerTimer) { clearTimeout(pauseLowPowerTimer); pauseLowPowerTimer = 0; } } catch(_) {}
+    pauseLowPowerTimer = safeClearTimeout(pauseLowPowerTimer, 'pause timer');
     pauseLowPowerTimer = setTimeout(() => {
-      try {
-        if (!isPlaying && player) {
-          if (player.setHeartbeatEnabled) player.setHeartbeatEnabled(false);
-          if (player.setMainNodeEnabled) player.setMainNodeEnabled(false);
-          if (player.setIdle) player.setIdle(true);
-        }
-      } catch(_) {}
+      if (!isPlaying && player) {
+        safePlayerCall(player.setAudioState, AUDIO_STATE.lowPower);
+      }
     }, PAUSE_LOW_POWER_MS);
   }
 
   /** Cancel low-power timer and wake audio (used when resuming). */
   function cancelPauseLowPower() {
-    try { if (pauseLowPowerTimer) { clearTimeout(pauseLowPowerTimer); pauseLowPowerTimer = 0; } } catch(_) {}
+    pauseLowPowerTimer = safeClearTimeout(pauseLowPowerTimer, 'pause timer in cancel');
     // Wake up audio immediately
-    try {
-      if (player) {
-        if (player.setIdle) player.setIdle(false);
-        if (player.setMainNodeEnabled) player.setMainNodeEnabled(true);
-      }
-    } catch(_) {}
+    safePlayerCall(player.setAudioState, AUDIO_STATE.wakeUp);
   }
 
   /** Clear the pending low-power timer without waking audio. */
   function clearPauseLowPowerTimer() {
-    try { if (pauseLowPowerTimer) { clearTimeout(pauseLowPowerTimer); pauseLowPowerTimer = 0; } } catch(_) {}
+    pauseLowPowerTimer = safeClearTimeout(pauseLowPowerTimer, 'pause timer in clear');
   }
 
   /** rAF-driven UI loop (runs only while playing). */
   function uiLoop() {
     if (!isPlaying) return;
     const now = performance.now();
-    if (!uiLoop._last || now - uiLoop._last > UI_UPDATE_INTERVAL_MS) {
-      updateTimeline();
-      try {
-        const reachedEnd = (totalTicks > 0 && currentTick >= totalTicks - 1);
-        const synthStopped = (player && player._synth && typeof player._synth.isPlayerPlaying === 'function' && !player._synth.isPlayerPlaying());
-        if (reachedEnd || synthStopped) {
-          debugTickState('uiLoop end detected');
-        }
-        if (isPlaying && (reachedEnd || synthStopped)) {
-          debugTickState('onEnded triggered from uiLoop');
-          onEnded();
-        }
-      } catch (_) {}
-      uiLoop._last = now;
-    }
+      if (!uiLoop._last || now - uiLoop._last > UI_UPDATE_INTERVAL_MS) {
+        updateTimeline();
+        checkForTrackEnd('uiLoop');
+        uiLoop._last = now;
+      }
     rafId = requestAnimationFrame(uiLoop);
   }
 
@@ -275,7 +432,7 @@
     if (len === 1) {
       if (loopOn) {
         // Loop single track without reloading to avoid artifacts
-        currentTick = 0;
+        timing.currentTick = 0;
         if (typeof player.seek === 'function') player.seek(0);
         playTrack();
       } else {
@@ -299,16 +456,20 @@
     debugTickState('playTrack start');
     debug('Play requested at index', currentIndex, 'title:', trackTitleEl.textContent);
     // Sync synth to our internal position first
-    try { if (typeof player.seek === 'function') player.seek(currentTick); } catch (_) {}
+    try { 
+      if (typeof player.seek === 'function') player.seek(timing.currentTick); 
+    } catch (error) {
+      console.error('[ERROR] Failed to seek to current tick:', error);
+    }
     debugTickState('after seek');
+    // Ensure the first UI frame after play uses our current state (post-seek)
+    suppressFirstSynthRead = true;
     player.play();
     debugTickState('after play');
     isPlaying = true;
-    playPauseBtn.textContent = '⏸';
+    setPlayPauseIcon(true);
     // Ensure audio graph is active and heartbeat enabled while playing
-    try { if (player.setIdle) player.setIdle(false); } catch(_) {}
-    try { if (player.setMainNodeEnabled) player.setMainNodeEnabled(true); } catch(_) {}
-    try { if (player.setHeartbeatEnabled) player.setHeartbeatEnabled(true); } catch(_) {}
+    safePlayerCall(player.setAudioState, AUDIO_STATE.playing);
     startUiLoop();
     cancelPauseLowPower();
   }
@@ -318,13 +479,14 @@
     await ensurePlayer();
     if (!player) return;
     debug('Pause requested');
-    try { if (player._synth && player._synth.retrievePlayerCurrentTick) currentTick = await player._synth.retrievePlayerCurrentTick(); } catch (_) {}
+    const tick = await safeSynthCall(player._synth?.retrievePlayerCurrentTick);
+    if (tick !== null) timing.currentTick = tick;
     if (typeof player.pause === 'function') player.pause();
     isPlaying = false;
-    playPauseBtn.textContent = '▶️';
+    setPlayPauseIcon(false);
     updateTimeline();
     // When paused, keep main node connected (so resume is instant), but we can suspend context if tab hidden
-    try { if (player.setHeartbeatEnabled) player.setHeartbeatEnabled(false); } catch(_) {}
+    safePlayerCall(player.setAudioState, AUDIO_STATE.paused);
     stopUiLoop();
     schedulePauseLowPower();
   }
@@ -335,7 +497,7 @@
     if (!player) return;
     debug('Stop requested');
     if (typeof player.pause === 'function') player.pause();
-    currentTick = 0;
+    timing.currentTick = 0;
     if (typeof player.seek === 'function') {
       // When track ends, player may be in "ended" state - try to restart it cleanly
       try {
@@ -363,16 +525,11 @@
       }
     }
     isPlaying = false;
-    playPauseBtn.textContent = '▶️';
-    // Reflect instantly in UI
-    const spt = secPerTick();
-    currentTimeEl.textContent = formatTimeStr(0);
-    totalTimeEl.textContent = formatTimeStr(totalTicks * spt);
-    seekEl.value = '0';
+    setPlayPauseIcon(false);
+    // Centralized UI render
+    await updateTimeline();
     // Reduce CPU: disable heartbeat; optionally suspend context
-    try { if (player.setHeartbeatEnabled) player.setHeartbeatEnabled(false); } catch(_) {}
-    try { if (player.setMainNodeEnabled) player.setMainNodeEnabled(false); } catch(_) {}
-    try { if (player.setIdle) player.setIdle(true); } catch(_) {}
+    safePlayerCall(player.setAudioState, AUDIO_STATE.stopped);
     stopUiLoop();
     clearPauseLowPowerTimer();
   }
@@ -400,11 +557,9 @@
       if (typeof player.seek === 'function') {
         await player.seek(0);
       }
-      currentTick = 0;
-      // Update UI immediately
-      const spt = secPerTick();
-      currentTimeEl.textContent = formatTimeStr(0);
-      seekEl.value = '0';
+      timing.currentTick = 0;
+      // Centralized UI render
+      await updateTimeline();
     } catch (e) {
       debug('Error seeking to beginning:', e);
     }
@@ -447,44 +602,8 @@
       const ext = (name.split('.').pop() || '').toLowerCase();
       if (!SUPPORTED_MIDI_EXTENSIONS.includes(ext)) continue;
       playlist.push({ name, ext, file });
-      const li = document.createElement('li');
-      const title = document.createElement('span');
-      title.className = 'title';
-      title.textContent = name;
-      const actions = document.createElement('span');
-      const playBtn = document.createElement('button');
-      playBtn.textContent = 'Play';
-      playBtn.addEventListener('click', async () => {
-        const idx = [...playlistEl.children].indexOf(li);
-        await loadTrack(idx);
-        playTrack();
-      });
-      const removeBtn = document.createElement('button');
-      removeBtn.textContent = '✕';
-      removeBtn.title = 'Remove';
-      removeBtn.addEventListener('click', () => {
-        const idx = [...playlistEl.children].indexOf(li);
-        if (idx === currentIndex) {
-          stopTrack();
-          currentIndex = -1;
-          trackTitleEl.textContent = 'No track loaded';
-        } else if (idx < currentIndex) {
-          currentIndex -= 1;
-        }
-        playlist.splice(idx, 1);
-        li.remove();
-        highlightActive();
-      });
-      actions.appendChild(playBtn);
-      actions.appendChild(removeBtn);
-      li.appendChild(title);
-      li.appendChild(actions);
-      li.addEventListener('dblclick', async () => {
-        const idx = [...playlistEl.children].indexOf(li);
-        await loadTrack(idx);
-        playTrack();
-      });
-      playlistEl.appendChild(li);
+      const listItem = createPlaylistItem(name);
+      playlistEl.appendChild(listItem);
     }
   }
 
@@ -509,7 +628,10 @@
       // De-dup and decode
       const unique = Array.from(new Set(names)).map(n => decodeURIComponent(n));
       return unique;
-    } catch(_) { return []; }
+    } catch (error) {
+      console.error('[ERROR] Failed to list Soundfonts directory:', error);
+      return [];
+    }
   }
 
   /** Refresh SoundFonts dropdown with current directory listing. */
@@ -542,13 +664,14 @@
       const url = 'Soundfonts/' + encodeURIComponent(name);
       const res = await fetch(url);
       if (!res.ok) throw new Error('Failed to fetch ' + name);
-      const buf = await res.arrayBuffer();
+      // Fetch SF2 file data as ArrayBuffer from the Soundfonts/ directory
+      const sf2FileData = await res.arrayBuffer();
       const wasPlaying = isPlaying;
-      let resumeTick = currentTick;
+      let resumeTick = timing.currentTick;
       if (wasPlaying) await pauseTrack();
-      if (typeof player.replaceSF2 === 'function') await player.replaceSF2(buf);
+      if (typeof player.loadSF2 === 'function') await player.loadSF2(sf2FileData, true);
       // Restore play state and position
-      currentTick = resumeTick;
+      timing.currentTick = resumeTick;
       if (wasPlaying) await playTrack();
       if (testChordBtn) testChordBtn.disabled = false;
       debug('SF2 switched to', name);
@@ -558,27 +681,22 @@
     }
   }
 
-  /** Parse PPQ from SMF header and update currentPPQ if present. */
+  /** Parse PPQ from SMF header and update timing.ppq if present. */
   function parsePpqFromSmfHeader(arrayBuffer) {
     try {
       const dv = new DataView(arrayBuffer);
       if (dv.getUint32(0, false) === 0x4D546864 /* 'MThd' */) {
         const div = dv.getInt16(12, false);
-        if ((div & 0x8000) === 0) { currentPPQ = Math.max(1, div); }
+        if ((div & 0x8000) === 0) { timing.ppq = Math.max(1, div); }
       }
-    } catch (_) {}
+    } catch (error) {
+      console.error('[ERROR] Failed to parse PPQ from SMF header:', error);
+    }
   }
 
   /** Set track title in the UI. */
   function updateTitle(name) {
     trackTitleEl.textContent = name || 'No track loaded';
-  }
-
-  /** Reset timing state before/after (re)loading a track. */
-  function _setTimingDefaults() {
-    currentTick = 0;
-    totalTicks = 0;
-    tempoUsPerQuarter = DEFAULT_TEMPO_US_PER_QUARTER;
   }
 
   /** Load track by index from playlist into the synth player. */
@@ -601,16 +719,20 @@
         await player.loadMIDI(u8);
 
         // Initialize timing state
-        _setTimingDefaults();
+        timing.reset();
         try {
-          totalTicks = player._synth ? (await player._synth.retrievePlayerTotalTicks()) || 0 : 0;
-          tempoUsPerQuarter = player._synth ? (await player._synth.retrievePlayerMIDITempo()) || DEFAULT_TEMPO_US_PER_QUARTER : DEFAULT_TEMPO_US_PER_QUARTER;
-        } catch (_) { totalTicks = 0; tempoUsPerQuarter = DEFAULT_TEMPO_US_PER_QUARTER; }
+          const totalTicks = player._synth ? (await player._synth.retrievePlayerTotalTicks()) || 0 : 0;
+          const tempoUsPerQuarter = player._synth ? (await player._synth.retrievePlayerMIDITempo()) || DEFAULT_TEMPO_US_PER_QUARTER : DEFAULT_TEMPO_US_PER_QUARTER;
+          timing.updateFromSynth(totalTicks, tempoUsPerQuarter);
+        } catch (error) { 
+          console.error('[ERROR] Failed to load timing from synth:', error);
+          timing.reset(); 
+        }
 
-        totalTimeEl.textContent = formatTimeStr(totalTicks * secPerTick());
-        updateTimeline();
+        // Centralized UI render
+        await updateTimeline();
       } catch (e) {
-        console.error(e);
+        console.error('[ERROR] Failed to load track into player:', e);
         alert('Failed to load: ' + item.name + (e && e.message ? '\n' + e.message : ''));
       }
     };
@@ -643,20 +765,32 @@
 
   // Volume slider: maps 0..100 to gain 0..1
   volumeEl.addEventListener('input', async () => {
-    await ensurePlayer();
-    const fractional = Number(volumeEl.value) / 100;
-    debug('Volume set', fractional);
-    if (player && player._gain) player._gain.gain.value = fractional;
+    try {
+      await ensurePlayer();
+      const fractional = Number(volumeEl.value) / 100;
+      debug('Volume set', fractional);
+      if (player && player._gain) player._gain.gain.value = fractional;
+    } catch (error) {
+      console.error('[ERROR] Failed to set volume:', error);
+    }
   });
 
-  // Seek slider: maps 0..1000 to 0..totalTicks, updates synth and UI immediately
+  // Seek slider: maps 0..SEEK_SLIDER_MAX to 0..totalTicks, updates synth and UI immediately
   seekEl.addEventListener('input', async () => {
-    await ensurePlayer();
-    if (totalTicks > 0) {
-      const targetTicks = Math.floor((Number(seekEl.value) / 1000) * totalTicks);
-      currentTick = targetTicks;
-      try { if (typeof player.seek === 'function') player.seek(targetTicks); } catch (_) {}
-      updateTimeline();
+    try {
+      await ensurePlayer();
+      if (timing.totalTicks > 0) {
+        const targetTicks = Math.floor((Number(seekEl.value) / SEEK_SLIDER_MAX) * timing.totalTicks);
+        timing.currentTick = targetTicks;
+        try { 
+          if (typeof player.seek === 'function') player.seek(targetTicks); 
+        } catch (error) {
+          console.error('[ERROR] Failed to seek to target ticks:', error);
+        }
+        updateTimeline();
+      }
+    } catch (error) {
+      console.error('[ERROR] Failed to handle seek input:', error);
     }
   });
 
@@ -673,7 +807,7 @@
     testBeepBtn.addEventListener('click', async () => {
       await ensurePlayer();
       try {
-        try { if (player && player.setIdle) await player.setIdle(false); } catch(_) {}
+        safePlayerCall(player.setAudioState, AUDIO_STATE.wakeUp);
         const ac = player._audioContext;
         const dest = player._gain || ac.destination;
         const osc = ac.createOscillator();
@@ -683,9 +817,17 @@
         osc.frequency.value = 440;
         osc.connect(g).connect(dest);
         osc.start();
-        setTimeout(() => { try { osc.stop(); osc.disconnect(); g.disconnect(); } catch(_){} }, 1000);
+        setTimeout(() => { 
+          try { 
+            osc.stop(); 
+            osc.disconnect(); 
+            g.disconnect(); 
+          } catch (error) {
+            console.error('[ERROR] Failed to cleanup test beep audio nodes:', error);
+          }
+        }, TEST_BEEP_DURATION_MS);
         console.log('[DEBUG] Test beep played');
-      } catch (e) { console.error('Test beep failed', e); }
+      } catch (e) { console.error('[ERROR] Test beep failed:', e); }
     });
   }
 
@@ -696,7 +838,7 @@
     testChordBtn.addEventListener('click', async () => {
       await ensurePlayer();
       try {
-        try { if (player && player.setIdle) await player.setIdle(false); } catch(_) {}
+        safePlayerCall(player.setAudioState, 'wakeUp');
         testChordBtn.disabled = true;
         const wasPlaying = isPlaying;
         if (wasPlaying) { await pauseTrack(); }
@@ -704,7 +846,7 @@
         if (wasPlaying) { await playTrack(); }
         console.log('[DEBUG] Test chord triggered');
       } catch (e) {
-        console.error('Test chord failed', e);
+        console.error('[ERROR] Test chord failed:', e);
       } finally {
         // Re-enable button if any SF2 is loaded (via file input or dropdown)
         const hasSf2File = sf2Input && sf2Input.files && sf2Input.files.length > 0;
@@ -719,18 +861,20 @@
     sf2Input.addEventListener('change', async () => {
       if (!sf2Input.files || sf2Input.files.length === 0) return;
       const file = sf2Input.files[0];
-      debug('Custom SF2 selected (Timidity)', file.name, file.size);
-      const buffer = await file.arrayBuffer();
+      debug('Custom SF2 selected (FluidSynth)', file.name, file.size);
+      // Read SF2 file data as ArrayBuffer from user's selected file
+      const sf2FileData = await file.arrayBuffer();
       await ensurePlayer();
       try {
-        await player.loadSF2(buffer);
-        debug('SF2 loaded into Timidity');
+        await player.loadSF2(sf2FileData, false);
+        debug('SF2 loaded into FluidSynth');
         if (testChordBtn) testChordBtn.disabled = false;
         // We can keep context suspended until user hits play
-        try { if (!isPlaying && player.setHeartbeatEnabled) player.setHeartbeatEnabled(false); } catch(_) {}
-        try { if (!isPlaying && player.setIdle) player.setIdle(true); } catch(_) {}
+        if (!isPlaying) {
+          safePlayerCall(player.setAudioState, AUDIO_STATE.stopped);
+        }
       } catch (e) {
-        console.error('Failed to load SF2 into Timidity:', e);
+        console.error('[ERROR] Failed to load SF2 into FluidSynth:', e);
         alert('Failed to load SF2: ' + (e && e.message ? e.message : e));
       }
     });

@@ -39,7 +39,7 @@
         <div class="transport">
           <button id="prevBtn" title="Previous">⏮️</button>
           <button id="rewindBtn" title="Back to beginning">⏪</button>
-          <button id="playPauseBtn" title="Play/Pause">▶️</button>
+          <button id="playPauseBtn" title="Play">▶️</button>
           <button id="stopBtn" title="Stop">⏹️</button>
           <button id="nextBtn" title="Next">⏭️</button>
 
@@ -63,7 +63,7 @@
           <span id="totalTime">00:00</span>
         </div>
 
-        <div class="now-playing">
+        <div class="now-playing" aria-live="polite">
           <strong id="trackTitle">No track loaded</strong>
         </div>
       </section>
@@ -78,6 +78,7 @@
     <script src="node_modules/js-synthesizer/externals/libfluidsynth-2.4.6-with-libsndfile.js"></script>
     <!-- js-synthesizer local browser bundle -->
     <script src="node_modules/js-synthesizer/dist/js-synthesizer.js"></script>
+    <!-- App split modules (load order matters) -->
     <script src="synthesizer-player.js"></script>
     <script src="app.js"></script>
   </body>

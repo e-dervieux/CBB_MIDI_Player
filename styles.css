@@ -84,13 +84,13 @@ html, body {
   color: var(--fg);
   border: 1px solid var(--border);
   cursor: pointer;
-  /* Keep controls from resizing when icon changes */
   min-width: 3em;
   height: 2.4em;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   line-height: 1;
+  font-size: 1.2em;
 }
 
 .player .transport button:hover {
@@ -160,25 +160,6 @@ input[type="range"] {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-/* WML-specific styles removed (using Timidity) */
-
-.wml-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: 10px;
-}
-.wml-status .dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #888;
-  display: inline-block;
-}
-.wml-ok { background: #1ecf61 !important; }
-.wml-bad { background: #ff5d5d !important; }
-.wml-unknown { background: #888 !important; }
 
 @media (max-width: 900px) {
   .app {
