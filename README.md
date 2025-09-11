@@ -4,9 +4,9 @@
 
 **⚠️   Disclaimer   ⚠️**
 
-CBB MIDI Player stands for *Crappy* Browser-Based MIDI Player. Crappy because I don't know anything about: web development, javascript (from which I stay as far as possible), the [FluidSynth](https://www.fluidsynth.org/) API, or the [js-synthesizer](https://github.com/jet2jet/js-synthesizer/tree/main) library. I achieved this by heavily relying on CursorAI, and trial-and-error smoke-testing. I did try to prompt the AI to make the app more robust, to comment its code, *etc.*, but the codebase *may* look like heresy for any expert in the field. Sorry about that.
+CBB MIDI Player stands for *Crappy* Browser-Based MIDI Player. Crappy because I don't know anything about: web development, javascript (from which I stay as far as possible), the [FluidSynth](https://www.fluidsynth.org/) API, or the [js-synthesizer](https://github.com/jet2jet/js-synthesizer/tree/main) library. I achieved this by heavily relying on CursorAI, and trial-and-error smoke-testing. I did try to prompt the AI to make the app more robust though, to comment its code, *etc.*, but the codebase *may* look like heresy for any expert in the field. Sorry about that.
 
-Feel free to use it at your own risk. I made this mainly for fun, and to have a usable MIDI player at hand on any platform that runs locally and allowed me to use my own soundfonts without loading times (as opposed to many web-based MIDI players that can be found out there).
+Feel free to use it at your own risk. I made this mainly for fun, and to have a usable MIDI player at hand on any platform that runs locally and allowed me to use my own soundfonts without loading times (as opposed to many web-based MIDI players that can be found out there). Still I **do** intend to maintain this and fix bugs as they arise so don't hesitate to contribute.
 
 
 ## About
