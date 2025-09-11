@@ -797,8 +797,10 @@
   // Keyboard shortcuts: Space play/pause, arrows prev/next
   document.addEventListener('keydown', (e) => {
     if (e.code === 'Space') { e.preventDefault(); togglePlayPause(); }
+    else if (e.key === 's' || e.key === 'S') { stopTrack(); }
     else if (e.code === 'ArrowRight') { nextTrack(); }
     else if (e.code === 'ArrowLeft') { prevTrack(); }
+    else if (e.code === 'ArrowDown') { e.preventDefault(); rewindToBeginning(); }
   });
 
   // Diagnostics

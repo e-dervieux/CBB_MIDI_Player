@@ -40,14 +40,16 @@ Then open [`http://localhost:8000`](http://localhost:8000) in your browser.
 
 ## Usage
 
-1. Put any SF2 files you want listed in the dropdown into the `Soundfonts/` folder. You can also load an SF2 via the file input button.
-2. Use “Add MIDI files” to select one or more `.mid`/`.midi` files.
-3. Select a track in the playlist and press Play. Seek, volume, Autoplay and Loop are available. You can also use the keyboard shortcuts:
+1. “Audio Test” plays a 1s test tone.
+2. Put any SF2 files you want listed in the dropdown into the `Soundfonts/` folder. You can also load an SF2 via the file input button.
+3. Use “Add MIDI files” to select one or more `.mid`/`.midi` files.
+4. Select a track in the playlist and press Play. Seek, volume, Autoplay and Loop are available. You can also use the keyboard shortcuts:
   - `Space` to play/pause
+  - `S` to stop
   - `ArrowRight` to skip to the next track
   - `ArrowLeft` to skip to the previous track
-4. “MIDI Test” plays a short C–E–G arpeggio using an isolated synth so it won’t change the main song’s instruments.
-5. “Audio Test” plays a 1s test tone.
+  - `ArrowDown` to rewind (Back to Beginning)
+5. “MIDI Test” plays a short C–E–G arpeggio using an isolated synth so it won’t change the main song’s instruments.
 6. “Refresh SF2” scans the `Soundfonts/` folder for SF2 files and updates the dropdown.
 
 ## Known issues
