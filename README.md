@@ -30,7 +30,7 @@ This player comes with the [Microsoft GS Wavetable Synth](https://web.archive.or
   - Python 3 (or any static HTTP server)
   - Modern browser (Chrome/Firefox). Use a server – do **not** open `index.html` via `file://`
 
-Install [js-synthesizer](https://github.com/jet2jet/js-synthesizer/tree/main) with `npm install js-synthesizer`.
+Install [js-synthesizer](https://github.com/jet2jet/js-synthesizer/tree/main) with `npm install js-synthesizer` (tested and working with version `1.11.0` of js-synthesizer).
 
 Run locally from the project root with:
 ```bash
