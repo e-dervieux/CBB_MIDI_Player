@@ -75,6 +75,7 @@
 
     /** Convert seconds to ticks. */
     secondsToTicks(seconds) {
+      console.warn('[WARN] secondsToTicks not tested / called yet.');
       return seconds / this.secPerTick;
     }
 
@@ -681,13 +682,34 @@
     }
   }
 
-  /** Parse PPQ from SMF header and update timing.ppq if present. */
+  /** Parse PPQ from SMF (Standard MIDI File) header and update timing.ppq if present.
+   * more info here: https://web.archive.org/web/20250302231448/https://midimusic.github.io/tech/midispec.html
+   * and here: https://web.archive.org/web/20250417220139/https://wiki.fourthwoods.com/standard_midi_file_format
+   * @param {ArrayBuffer} arrayBuffer - the SMF file data
+   * @returns {void}
+  */
   function parsePpqFromSmfHeader(arrayBuffer) {
     try {
       const dv = new DataView(arrayBuffer);
       if (dv.getUint32(0, false) === 0x4D546864 /* 'MThd' */) {
         const div = dv.getInt16(12, false);
-        if ((div & 0x8000) === 0) { timing.ppq = Math.max(1, div); }
+        if ((div & 0x8000) === 0) {
+          // PPQ format: use the division value as PPQ
+          if (div > 0) {
+            timing.ppq = div;
+          } else {
+            console.error('[ERROR] Invalid PPQ value, using default PPQ');
+            console.warn('[WARN] MIDI playback time-related info may be erroneous');
+            timing.ppq = DEFAULT_PPQ;
+          }
+          timing.setSecPerTick(); // Recalculate secPerTick with new PPQ
+        } else {
+          // SMPTE format: not supported, use default PPQ
+          console.error('[ERROR] SMPTE timing format not supported, using default PPQ');
+        }
+      } else {
+        // Not a valid SMF file
+        console.error('[ERROR] Invalid SMF file header, using default PPQ');
       }
     } catch (error) {
       console.error('[ERROR] Failed to parse PPQ from SMF header:', error);
@@ -713,13 +735,13 @@
         debug('Loading track into player:', item.name, '(' + item.ext + ')');
         if (typeof player.pause === 'function') player.pause();
         await waitForSynthReady(5000);
+        
+        // Initialize timing state BEFORE parsing PPQ
+        timing.reset();
         parsePpqFromSmfHeader(arrayBuffer);
 
         const u8 = new Uint8Array(arrayBuffer);
         await player.loadMIDI(u8);
-
-        // Initialize timing state
-        timing.reset();
         try {
           const totalTicks = player._synth ? (await player._synth.retrievePlayerTotalTicks()) || 0 : 0;
           const tempoUsPerQuarter = player._synth ? (await player._synth.retrievePlayerMIDITempo()) || DEFAULT_TEMPO_US_PER_QUARTER : DEFAULT_TEMPO_US_PER_QUARTER;
