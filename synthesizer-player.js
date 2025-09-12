@@ -379,7 +379,17 @@
     async setIdle(idle){
       try {
         if (idle) { 
-          await this._audioContext.suspend(); 
+          const sampleRate = this._audioContext.sampleRate;
+          const bufferDurationMs = (AUDIO_BUFFER_SIZE / sampleRate) * 1000;
+          const drainDelayMs = Math.ceil(bufferDurationMs * 2);  // 2x buffer duration ensures complete drain
+          
+          setTimeout(async () => {
+            try {
+              await this._audioContext.suspend(); 
+            } catch (error) {
+              console.error('[ERROR] Failed to suspend audio context:', error);
+            }
+          }, drainDelayMs);
         } else { 
           await this._audioContext.resume(); 
         }
