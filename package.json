@@ -1,0 +1,35 @@
+{
+  "name": "cbb-midi-player",
+  "version": "1.0.0",
+  "description": "A web-based MIDI player using FluidSynth and js-synthesizer with SoundFont support",
+  "main": "src/app.js",
+  "scripts": {
+    "build": "node build.js",
+    "build:dev": "node build.js --dev",
+    "serve": "npm run build && python3 -m http.server 8000 --directory dist",
+    "serve:dev": "python3 -m http.server 8000",
+    "clean": "rm -rf dist"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/e-dervieux/CBB_MIDI_Player.git"
+  },
+  "homepage": "https://e-dervieux.github.io/CBB_MIDI_Player/",
+  "keywords": [
+    "midi",
+    "music",
+    "synthesizer",
+    "soundfont",
+    "fluidsynth",
+    "web-audio"
+  ],
+  "author": "Emmanuel Dervieux",
+  "license": "Unlicense",
+  "dependencies": {
+    "js-synthesizer": "^1.11.0"
+  },
+  "devDependencies": {},
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

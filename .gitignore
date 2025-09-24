@@ -3,3 +3,8 @@
 *.SF2
 **/.DS_Store
 node_modules
+dist/
+
+# Demo content exceptions (only these files get committed)
+!demo/MIDI/demo.MID
+!demo/Soundfonts/Microsoft_GS_Wavetable_Synth.sf2

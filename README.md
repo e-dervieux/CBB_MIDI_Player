@@ -1,6 +1,6 @@
 # CBB MIDI Player
 
-![image.png](player_pic.png)
+![image.png](assets/player_pic.png)
 
 **⚠️   Disclaimer   ⚠️**
 
