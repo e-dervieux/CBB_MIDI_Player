@@ -14,6 +14,8 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+const isGithubPages = process.env.CI === 'true';
+
 // Find latest FluidSynth version
 function findLatestFluidSynth(dir) {
   if (!fs.existsSync(dir)) return null;
@@ -149,7 +151,7 @@ function copyBuildAssets() {
 
 export default defineConfig({
   root: '.',
-  base: './',
+  base: isGithubPages ? '/CBB_MIDI_Player/' : './',
   publicDir: false,
   build: {
     outDir: 'dist',
