@@ -2,6 +2,7 @@
 *.MIDI
 *.SF2
 **/.DS_Store
+.vite
 node_modules
 dist/
 

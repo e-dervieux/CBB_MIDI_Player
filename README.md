@@ -1,5 +1,7 @@
 # CBB MIDI Player
 
+🎵 Live demo available [here](https://e-dervieux.github.io/CBB_MIDI_Player/)! 🎵
+
 ![image.png](assets/player_pic.png)
 
 **⚠️   Disclaimer   ⚠️**
