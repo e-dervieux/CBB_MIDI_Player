@@ -5,6 +5,10 @@
 node_modules
 dist/
 
-# Demo content exceptions (only these files get committed)
-!demo/MIDI/demo.MID
-!demo/Soundfonts/Microsoft_GS_Wavetable_Synth.sf2
+# Auto-generated files
+fluidsynth-version.js
+soundfonts.json
+
+# Sound data content exceptions (only these files get committed)
+!sound_data/MIDI/demo.MID
+!sound_data/Soundfonts/Microsoft_GS_Wavetable_Synth.sf2

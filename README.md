@@ -26,31 +26,59 @@ This player comes with the [Microsoft GS Wavetable Synth](https://web.archive.or
 
 ## Requirements and installation
 
-  - Node.js (for installing js-synthesizer)
-  - Python 3 (or any static HTTP server)
+  - Node.js 18+ (for building the project)
+  - Python 3 or any static HTTP server (for serving the built app)
   - Modern browser (Chrome/Firefox). Use a server – do **not** open `index.html` via `file://`
+  
+### Development Mode
 
-Install [js-synthesizer](https://github.com/jet2jet/js-synthesizer/tree/main) with `npm install js-synthesizer` (tested and working with version `1.11.0` of js-synthesizer).
+For development with hot-reloading:
 
-Run locally from the project root with:
 ```bash
-python3 -m http.server 8000
+npm install
+npm run dev
 ```
+
 Then open [`http://localhost:8000`](http://localhost:8000) in your browser.
+
+### Production Build
+
+To build and serve the production version:
+
+```bash
+npm install
+npm run serve
+```
+
+This will build the project into the `dist/` folder and serve it at [`http://localhost:8000`](http://localhost:8000).
+
+Alternatively, you can build and serve separately:
+
+```bash
+npm run build
+python3 -m http.server 8000 --directory dist
+```
 
 ## Usage
 
-1. “Audio Test” plays a 1s test tone.
-2. Put any SF2 files you want listed in the dropdown into the `Soundfonts/` folder. You can also load an SF2 via the file input button.
-3. Use “Add MIDI files” to select one or more `.mid`/`.midi` files.
-4. Select a track in the playlist and press Play. Seek, volume, Autoplay and Loop are available. You can also use the keyboard shortcuts:
-  - `Space` to play/pause
-  - `S` to stop
-  - `ArrowRight` to skip to the next track
-  - `ArrowLeft` to skip to the previous track
-  - `ArrowDown` to rewind (back to the beginning of the current track)
-5. “MIDI Test” plays a short C–E–G arpeggio using an isolated synth so it won’t change the main song’s instruments.
-6. “Refresh SF2” scans the `Soundfonts/` folder for SF2 files and updates the dropdown.
+1. **Audio Test** plays a 1s test tone to verify audio output.
+2. **Load SF2**: 
+   - On **GitHub Pages**: The dropdown shows pre-bundled SF2 files from the `sound_data/Soundfonts/` folder
+   - **Locally**: The refresh button (⟳) scans for new SF2 files you add to `sound_data/Soundfonts/`
+   - You can also load any SF2 file via the "Load custom SF2" file input
+3. **Add MIDI files** to select one or more `.mid`/`.midi` files from your computer.
+4. Select a track in the playlist and press **Play**. Available controls:
+   - Timeline seek and volume slider
+   - **Autoplay**: plays next track when current one ends
+   - **Loop**: loops current track (or entire playlist if autoplay is on)
+5. **Keyboard shortcuts**:
+   - `Space` - play/pause
+   - `S` - stop
+   - `ArrowRight` - next track
+   - `ArrowLeft` - previous track
+   - `ArrowDown` - rewind to beginning
+6. **MIDI Test** plays a short C–E–G arpeggio to verify MIDI playback.
+7. **Refresh SF2** button (⟳) rescans the `sound_data/Soundfonts/` folder (works only when served locally with directory listing enabled).
 
 ## Known issues
 

@@ -5,8 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="data:image/png;base64,iVBORw0KGgo=">
     <title>MIDI Player</title>
-    <link rel="stylesheet" href="styles.css" />
-  </head>
+    </head>
   <body>
     <header class="app-header">
       <h1>CBB MIDI Player</h1>
@@ -23,7 +22,7 @@
           <input id="sf2Input" type="file" accept=".sf2,.sf3" />
         </div>
         <div class="selector">
-          <label for="sf2Select">Choose SF2 (from Soundfonts/)</label>
+          <label for="sf2Select">Choose SF2 (from sound_data/Soundfonts/)</label>
           <select id="sf2Select">
             <option value="">— none —</option>
           </select>
@@ -32,6 +31,7 @@
         <div class="selector">
           <button id="testBeepBtn" class="btn" title="Play a 1s test tone">Audio Test</button>
           <button id="testChordBtn" class="btn" title="Play a short MIDI test on piano">MIDI Test</button>
+          <button id="playDemoBtn" class="btn" title="Load and play the demo MIDI file">Play Demo File</button>
         </div>
       </section>
 
@@ -74,13 +74,14 @@
       </section>
     </main>
 
-    <!-- FluidSynth WASM loader (required by js-synthesizer) -->
-    <script src="node_modules/js-synthesizer/externals/libfluidsynth-2.4.6-with-libsndfile.js"></script>
-    <!-- js-synthesizer local browser bundle -->
-    <script src="node_modules/js-synthesizer/dist/js-synthesizer.js"></script>
-    <!-- App split modules (load order matters) -->
-    <script src="synthesizer-player.js"></script>
-    <script src="app.js"></script>
+    <!-- Load app as module - Vite will bundle everything -->
+    <script type="module" src="./main.js"></script>
+
+    <footer style="text-align: center">
+      Source code available on <a href="https://github.com/e-dervieux/CBB_MIDI_Player" target="_blank" rel="noopener noreferrer">
+        GitHub
+      </a>
+    </footer>
   </body>
 </html>
 
