@@ -22,6 +22,7 @@ const AUDIO_STATE = Object.freeze({
   wakeUp: 'wakeUp'      // transient state to quickly resume context and reconnect nodes
 });
 const SOUND_DATA_PATH = './sound_data/';
+const customSf2Registry = new Map();  // Registry for custom SF2s added during this session: name -> ArrayBuffer
 
 // ---------------------------------------------------------------------------
 // App State
@@ -692,15 +693,28 @@ async function refreshSf2List() {
 /** Replace current SF2 with the selected one, preserving play state. */
 async function applySelectedSf2() {
   if (!sf2Select) return;
-  const name = sf2Select.value;
-  if (!name) return;
+  const selected = sf2Select.value;
+  if (!selected) return;
   await ensurePlayer();
   try {
-    const url = SOUND_DATA_PATH + 'Soundfonts/' + encodeURIComponent(name);
-    const res = await fetch(url);
-    if (!res.ok) throw new Error('Failed to fetch ' + name);
-    // Fetch SF2 file data as ArrayBuffer from the demo/Soundfonts/ directory
-    const sf2FileData = await res.arrayBuffer();
+    let sf2FileData;
+    let displayName = selected;
+
+    // Custom entry path: value starts with prefix
+    if (selected.startsWith('custom::')) {
+      const name = selected.slice('custom::'.length);
+      const buf = customSf2Registry.get(name);
+      if (!buf) throw new Error('Custom SF2 not found in session registry');
+      sf2FileData = buf;
+      displayName = `Custom: ${name}`;
+    } else {
+      // Built-in path: fetch from sound_data/Soundfonts
+      const url = SOUND_DATA_PATH + 'Soundfonts/' + encodeURIComponent(selected);
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Failed to fetch ' + selected);
+      sf2FileData = await res.arrayBuffer();
+    }
+
     const wasPlaying = isPlaying;
     let resumeTick = timing.currentTick;
     if (wasPlaying) await pauseTrack();
@@ -709,7 +723,7 @@ async function applySelectedSf2() {
     timing.currentTick = resumeTick;
     if (wasPlaying) await playTrack();
     if (testChordBtn) testChordBtn.disabled = false;
-    debug('SF2 switched to', name);
+    debug('SF2 switched to', displayName);
   } catch (e) {
     console.error('Failed to switch SF2', e);
     alert('Failed to load SF2: ' + (e && e.message ? e.message : e));
@@ -943,20 +957,51 @@ if (sf2Input) {
     if (!sf2Input.files || sf2Input.files.length === 0) return;
     const file = sf2Input.files[0];
     debug('Custom SF2 selected (FluidSynth)', file.name, file.size);
-    // Read SF2 file data as ArrayBuffer from user's selected file
+
+    // Read SF2 file data as ArrayBuffer
     const sf2FileData = await file.arrayBuffer();
-    await ensurePlayer();
-    try {
-      await player.loadSF2(sf2FileData, false);
-      debug('SF2 loaded into FluidSynth');
-      if (testChordBtn) testChordBtn.disabled = false;
-      // We can keep context suspended until user hits play
-      if (!isPlaying) {
-        safePlayerCall(player.setAudioState, AUDIO_STATE.stopped);
+
+    // If a custom with the same name already exists, ask to replace
+    const existingValue = `custom::${file.name}`;
+    const existingOption = Array.from(sf2Select?.options || []).find(opt => opt.value === existingValue);
+    if (existingOption) {
+      const replace = window.confirm(`A custom SF2 named "${file.name}" already exists. Replace it with the new file?`);
+      if (!replace) {
+        // Keep existing; select it and load
+        if (sf2Select) sf2Select.value = existingValue;
+        await applySelectedSf2();
+        return;
       }
-    } catch (e) {
-      console.error('[ERROR] Failed to load SF2 into FluidSynth:', e);
-      alert('Failed to load SF2: ' + (e && e.message ? e.message : e));
+    }
+
+    // Store/replace in registry
+    customSf2Registry.set(file.name, sf2FileData);
+
+    // Ensure an option exists (insert or update)
+    let opt = existingOption;
+    if (!opt) {
+      opt = document.createElement('option');
+      opt.value = `custom::${file.name}`;
+      opt.textContent = `Custom: ${file.name}`;
+      // Insert custom option at top of list (after placeholder if any)
+      if (sf2Select) {
+        if (sf2Select.firstChild) {
+          sf2Select.insertBefore(opt, sf2Select.firstChild.nextSibling);
+        } else {
+          sf2Select.appendChild(opt);
+        }
+      }
+    } else {
+      opt.textContent = `Custom: ${file.name}`;
+    }
+
+    // Select and load via unified path
+    if (sf2Select) sf2Select.value = `custom::${file.name}`;
+    await applySelectedSf2();
+
+    // Keep context suspended if idle
+    if (!isPlaying) {
+      safePlayerCall(player.setAudioState, AUDIO_STATE.stopped);
     }
   });
 }

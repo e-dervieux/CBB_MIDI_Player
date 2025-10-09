@@ -6,20 +6,20 @@
 
 **⚠️   Disclaimer   ⚠️**
 
-CBB MIDI Player stands for *Crappy* Browser-Based MIDI Player. Crappy because I don't know anything about: web development, javascript (from which I stay as far as possible), the [FluidSynth](https://www.fluidsynth.org/) API, or the [js-synthesizer](https://github.com/jet2jet/js-synthesizer/tree/main) library. I achieved this by heavily relying on CursorAI, and trial-and-error smoke-testing. I did try to prompt the AI to make the app more robust though, to comment its code, *etc.*, but the codebase *may* look like heresy for any expert in the field of web-development. Sorry about that.
+CBB MIDI Player stands for *Crappy* Browser-Based MIDI Player. *Crappy* because I don't know anything about: web development, javascript (from which I stay as far as possible), the [FluidSynth](https://www.fluidsynth.org/) API, or the [js-synthesizer](https://github.com/jet2jet/js-synthesizer/tree/main) library. I achieved this by heavily relying on CursorAI, and trial-and-error smoke-testing. I *did* try to prompt the AI to make the app more robust though, to comment its code, *etc.*, but the codebase *may* look like heresy for any expert in the field of web-development. Sorry about that.
 
-Feel free to use it at your own risk. I made this mainly for fun, and to have a usable MIDI player at hand, which *(i)* can run on any platform, *(ii)* runs locally and *(iii)* allowed me to use my own soundfonts without loading times (as opposed to many web-based MIDI players that can be found out there). Still I **do** intend to maintain this and fix bugs as they arise so don't hesitate to contribute.
+Feel free to use it at your own risk. I made this mainly for fun, and to have a usable MIDI player at hand, which *(i)* can run on any platform, *(ii)* runs locally and *(iii)* allowed me to use my own soundfonts without significant uploading times (as opposed to many web-based MIDI players that can be found out there). Still I **do** intend to maintain this and fix bugs as they arise so don't hesitate to contribute or report issues in the [issues](https://github.com/e-dervieux/CBB_MIDI_Player/issues) section.
 
 
 ## About
 
-This is a browser-based MIDI player with SoundFont (SF2) support using [js-synthesizer](https://github.com/jet2jet/js-synthesizer/tree/main) (a [FluidSynth](https://www.fluidsynth.org/) WASM port). It includes a playlist, timeline, play/pause/stop, Autoplay, Loop, MIDI Test, SF2 folder scan, and background-safe handling.
+This is a browser-based MIDI player with SoundFont (SF2) support using [js-synthesizer](https://github.com/jet2jet/js-synthesizer/tree/main) (a [FluidSynth](https://www.fluidsynth.org/) WASM port). It includes a playlist, a timeline with play/pause/stop/rewind buttons, autoplay of the next track, and a loop functionnality.
 
-This player comes with the [Microsoft GS Wavetable Synth](https://web.archive.org/web/20250616150719/https://midis.fandom.com/wiki/Microsoft_GS_Wavetable_Synth) soundfont, and a demo MIDI file (main menu music from *Heroes of Might and Magic II*). You may find other soundfonts [here](https://github.com/bratpeki/soundfonts) and [there](https://github.com/ad-si/awesome-soundfonts) if need be, also check this [Reddit thread](https://www.reddit.com/r/midi/comments/pmh94q/whats_the_best_allaround_soundfont/).
+This player comes with the [Microsoft GS Wavetable Synth](https://web.archive.org/web/20250616150719/https://midis.fandom.com/wiki/Microsoft_GS_Wavetable_Synth) soundfont, and a demo MIDI file (main menu music from *Heroes of Might and Magic II*). You may find other soundfonts [here](https://github.com/bratpeki/soundfonts) and [there](https://github.com/ad-si/awesome-soundfonts) if need be ; also check this [Reddit thread](https://www.reddit.com/r/midi/comments/pmh94q/whats_the_best_allaround_soundfont/). I chose to include Microsoft GS Wavetable Synth because it's a good all-around soundfont with a good size / completeness ratio (only weights 3.2 MB).
 
 ## Features
 - Playlist of local MIDI files (you can add multiple tracks at once)
-- Load SF2 from file or pick one from `Soundfonts/` dropdown (folder scan to automatically add SF2 files to the dropdown)
+- Load SF2 from file or pick one from the `Soundfonts/` dropdown (there is a folder scan to automatically add SF2 files to the dropdown)
 - Timeline/seek, volume, Play/Pause/Stop/Rewind
 - Autoplay (plays next track when the current one ends) and Loop (loop on the current track if autoplay is disabled, or loop on all tracks if autoplay is enabled)
 - “Audio Test” (should play a 1 s test tone) and “MIDI Test” (should play a short MIDI test using a piano sound) buttons
@@ -28,9 +28,11 @@ This player comes with the [Microsoft GS Wavetable Synth](https://web.archive.or
 
 ## Requirements and installation
 
+In order to run the project locally, you need to have the following installed:
+
   - Node.js 18+ (for building the project)
   - Python 3 or any static HTTP server (for serving the built app)
-  - Modern browser (Chrome/Firefox). Use a server – do **not** open `index.html` via `file://`
+  - A modern web browser (e.g. Firefox). Use a server – do **not** open `index.html` via `file://`
   
 ### Development Mode
 
@@ -67,7 +69,7 @@ python3 -m http.server 8000 --directory dist
 2. **Load SF2**: 
    - On **GitHub Pages**: The dropdown shows pre-bundled SF2 files from the `sound_data/Soundfonts/` folder
    - **Locally**: The refresh button (⟳) scans for new SF2 files you add to `sound_data/Soundfonts/`
-   - You can also load any SF2 file via the "Load custom SF2" file input
+   - You can also load any SF2 file from disk *via* the "Load custom SF2" file input, which will be added to the dropdown, and become available to the player
 3. **Add MIDI files** to select one or more `.mid`/`.midi` files from your computer.
 4. Select a track in the playlist and press **Play**. Available controls:
    - Timeline seek and volume slider
