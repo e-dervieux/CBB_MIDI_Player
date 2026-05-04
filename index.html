@@ -47,9 +47,19 @@
             <input type="checkbox" id="autoplayToggle" checked /> Autoplay
           </label>
 
-          <label class="inline" title="Loop current track">
-            <input type="checkbox" id="loopToggle" /> Loop
-          </label>
+          <div class="loop-controls-box" title="Loop playback when a track ends">
+            <label class="loop-enable-label">
+              <input type="checkbox" id="loopEnableToggle" /> 🔄 Loop
+            </label>
+            <div id="loopModeField" class="loop-mode-field loop-mode--disabled" role="group" aria-label="Loop mode">
+              <label class="loop-mode-label">
+                <input type="radio" name="loopMode" id="loopModeTrack" value="track" disabled /> Track
+              </label>
+              <label class="loop-mode-label">
+                <input type="radio" name="loopMode" id="loopModePlaylist" value="playlist" checked disabled /> Playlist
+              </label>
+            </div>
+          </div>
 
           <div class="volume">
             <span>🔊</span>

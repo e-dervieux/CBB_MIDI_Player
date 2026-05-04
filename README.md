@@ -21,7 +21,7 @@ This player comes with the [Microsoft GS Wavetable Synth](https://web.archive.or
 - Playlist of local MIDI files (you can add multiple tracks at once)
 - Load SF2 from file or pick one from the `Soundfonts/` dropdown (there is a folder scan to automatically add SF2 files to the dropdown)
 - Timeline/seek, volume, Play/Pause/Stop/Rewind
-- Autoplay (plays next track when the current one ends) and Loop (loop on the current track if autoplay is disabled, or loop on all tracks if autoplay is enabled)
+- Autoplay (plays the next track when the current one ends) and **Loop** with a mode: **Track** (repeat the current item) or **Playlist** (advance and wrap at the end of the list). The Track/Playlist choices are disabled until you turn Loop on.
 - “Audio Test” (should play a 1 s test tone) and “MIDI Test” (should play a short MIDI test using a piano sound) buttons
 - Background-tab safe (will continue playing when the tab is in the background)
 - “Low-power” idle: after 30s paused or upon stopping the player, audio graph is suspended/disconnected
@@ -74,7 +74,7 @@ python3 -m http.server 8000 --directory dist
 4. Select a track in the playlist and press **Play**. Available controls:
    - Timeline seek and volume slider
    - **Autoplay**: plays next track when current one ends
-   - **Loop**: loops current track (or entire playlist if autoplay is on)
+   - **Loop** + **Track** or **Playlist**: when Loop is on, choose whether the same track repeats or the playlist wraps to the next item after each end
 5. **Keyboard shortcuts**:
    - `Space` - play/pause
    - `S` - stop

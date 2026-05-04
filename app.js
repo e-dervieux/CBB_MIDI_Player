@@ -106,7 +106,10 @@ const currentTimeEl = document.getElementById('currentTime');
 const totalTimeEl = document.getElementById('totalTime');
 const trackTitleEl = document.getElementById('trackTitle');
 const autoplayToggle = document.getElementById('autoplayToggle');
-const loopToggle = document.getElementById('loopToggle');
+const loopEnableToggle = document.getElementById('loopEnableToggle');
+const loopModeField = document.getElementById('loopModeField');
+const loopModeTrack = document.getElementById('loopModeTrack');
+const loopModePlaylist = document.getElementById('loopModePlaylist');
 const sf2Input = document.getElementById('sf2Input');
 const sf2Select = document.getElementById('sf2Select');
 const refreshSf2Btn = document.getElementById('refreshSf2Btn');
@@ -259,16 +262,35 @@ function createPlaylistItem(name) {
   });
   return listItem;
 }
+/** Whether the Loop checkbox is on (Track/Playlist radios are only active when this is true). */
+function isLoopEnabled() {
+  return !!(loopEnableToggle && loopEnableToggle.checked);
+}
+
+/** @returns {'track' | 'playlist'} */
+function getLoopMode() {
+  if (loopModeTrack && loopModeTrack.checked) return 'track';
+  return 'playlist';
+}
+
+/** Enable/disable loop mode radios to match the Loop checkbox; dim container when off. */
+function syncLoopModeRadiosUi() {
+  const enabled = isLoopEnabled();
+  if (loopModeField) loopModeField.classList.toggle('loop-mode--disabled', !enabled);
+  if (loopModeTrack) loopModeTrack.disabled = !enabled;
+  if (loopModePlaylist) loopModePlaylist.disabled = !enabled;
+}
+
 /**
  * Next index when advancing due to player end.
- * Honors Loop and Autoplay; returns null when stopping.
+ * Honors Loop mode and Autoplay; returns null when stopping or when looping the current track.
  */
 function getNextIndexForPlayer() {
   const len = getTrackCount();
   if (len === 0) return null;
-  if (hasSingleTrack()) return null; // handled by onEnded branch
-  const loopOn = !!(loopToggle && loopToggle.checked);
-  if (loopOn) return (currentIndex + 1) % len;
+  if (hasSingleTrack()) return null; // handled in onEnded
+  if (isLoopEnabled() && getLoopMode() === 'track') return null;
+  if (isLoopEnabled() && getLoopMode() === 'playlist') return (currentIndex + 1) % len;
   if (autoplay) return currentIndex < len - 1 ? currentIndex + 1 : null;
   return null;
 }
@@ -424,7 +446,7 @@ function onEnded() {
   isPlaying = false;
   playPauseBtn.textContent = '▶️';
   const len = getTrackCount();
-  const loopOn = !!(loopToggle && loopToggle.checked);
+  const loopOn = isLoopEnabled();
 
   if (len === 1) {
     if (loopOn) {
@@ -435,6 +457,14 @@ function onEnded() {
     } else {
       stopTrack();
     }
+    return;
+  }
+
+  // Multi-track: repeat current song when Loop → Track; playlist wrap uses getNextIndexForPlayer.
+  if (loopOn && getLoopMode() === 'track') {
+    timing.currentTick = 0;
+    if (player && typeof player.seek === 'function') player.seek(0);
+    playTrack();
     return;
   }
 
@@ -831,7 +861,12 @@ nextBtn.addEventListener('click', nextTrack);
 
 // Toggles
 autoplayToggle.addEventListener('change', () => { autoplay = autoplayToggle.checked; });
-if (loopToggle) loopToggle.addEventListener('change', () => { /* read in onEnded */ });
+if (loopEnableToggle) {
+  syncLoopModeRadiosUi();
+  loopEnableToggle.addEventListener('change', () => {
+    syncLoopModeRadiosUi();
+  });
+}
 
 // Volume slider: maps 0..100 to gain 0..1
 volumeEl.addEventListener('input', async () => {
