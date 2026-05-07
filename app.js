@@ -4,7 +4,7 @@
   - Clear separation of concerns and comments for maintainability
 */
 
-import { DEFAULT_BPM, DEFAULT_TEMPO_US_PER_QUARTER } from './playback-defaults.js';
+import { DEFAULT_BPM, DEFAULT_TEMPO_US_PER_QUARTER, DEFAULT_BUNDLED_SF2_NAME } from './playback-defaults.js';
 import { JSSynthPlayer } from './synthesizer-player.js';
 
 // ---------------------------------------------------------------------------
@@ -932,6 +932,10 @@ async function refreshSf2List() {
     sf2Select.appendChild(opt);
   }
   if (opts.includes(current)) sf2Select.value = current; else sf2Select.value = '';
+  if (!sf2Select.value && opts.includes(DEFAULT_BUNDLED_SF2_NAME)) {
+    sf2Select.value = DEFAULT_BUNDLED_SF2_NAME;
+    await applySelectedSf2();
+  }
 }
 
 /** Replace current SF2 with the selected one, preserving play state. */

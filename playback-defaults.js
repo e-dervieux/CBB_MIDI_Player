@@ -5,3 +5,6 @@
  */
 export const DEFAULT_BPM = 120;
 export const DEFAULT_TEMPO_US_PER_QUARTER = Math.round(60_000_000 / DEFAULT_BPM);
+
+/** Bundled font selected and loaded on startup when present (same basename as in sound_data/Soundfonts/ and soundfonts.json). */
+export const DEFAULT_BUNDLED_SF2_NAME = 'Microsoft_GS_Wavetable_Synth.sf2';
