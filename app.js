@@ -4,15 +4,18 @@
   - Clear separation of concerns and comments for maintainability
 */
 
+import { DEFAULT_BPM, DEFAULT_TEMPO_US_PER_QUARTER } from './playback-defaults.js';
+import { JSSynthPlayer } from './synthesizer-player.js';
+
 // ---------------------------------------------------------------------------
 // Constants / Config
 // ---------------------------------------------------------------------------
 const UI_UPDATE_INTERVAL_MS = 50;     // ~20 fps timeline updates
-const DEFAULT_TEMPO_US_PER_QUARTER = 500000; // 120 BPM
 const DEFAULT_PPQ = 480;              // PPQ = Pulses Per Quarter note (MIDI tick resolution)
 const PAUSE_LOW_POWER_MS = 30000;     // 30s to fully suspend when paused
 const SUPPORTED_MIDI_EXTENSIONS = ['mid', 'midi', 'mld', 'mml', 'mmi', 'ms2mml', 'mms'];
 const SEEK_SLIDER_MAX = 1000;         // range max for seek slider
+const KEYBOARD_SEEK_STEP_SEC = 5;     // Wall-clock seconds for ArrowLeft / ArrowRight Seek
 const TEST_BEEP_DURATION_MS = 1000;   // test beep duration
 const AUDIO_STATE = Object.freeze({
   playing: 'playing',   // full pipeline active (context resumed, main + heartbeat connected)
@@ -24,6 +27,15 @@ const AUDIO_STATE = Object.freeze({
 const SOUND_DATA_PATH = './sound_data/';
 const customSf2Registry = new Map();  // Registry for custom SF2s added during this session: name -> ArrayBuffer
 
+/** Slider range for relative playback speed (maps to FluidSynth internal tempo multiplier when base = T_ref). */
+const TEMPO_FACTOR_MIN = 0.5;
+const TEMPO_FACTOR_MAX = 2;
+const TEMPO_FACTOR_STEP = 0.05;
+const TEMPO_FACTOR_DEFAULT = 1;
+/** Reasonable manual BPM input range (extremes still clamped into FluidSynth 0.001…1000 multiplier). */
+const MANUAL_BPM_MIN = 1;
+const MANUAL_BPM_MAX = 1000;
+
 // ---------------------------------------------------------------------------
 // App State
 // ---------------------------------------------------------------------------
@@ -32,6 +44,11 @@ const playlist = [];     // { name, ext, file, arrayBuffer? }
 let currentIndex = -1;   // active playlist index
 let isPlaying = false;   // transport state (true while playing)
 let autoplay = true;     // autoplay toggle state
+
+/** Canonical tempo state updated when a file sets T_ref; controls (checkbox, inputs, slider) stay in the DOM. */
+const tempoStore = {
+  trackRefBpm: DEFAULT_BPM,
+};
 
 // ---------------------------------------------------------------------------
 // Timing State Management
@@ -67,14 +84,19 @@ class TimingState {
     this.secPerTick = (this.tempoUsPerQuarter / 1e6) / this.ppq;
   }
 
-  /** Convert ticks to seconds. */
+  /**
+   * Convert ticks to seconds for the timeline labels.
+   * `secPerTick` comes from the synth-reported MIDI tempo (refreshed in `updateTimeline`), which
+   * reflects FluidSynth’s internal tempo multiplier, so these are listening-duration seconds, not a
+   * fixed score-length independent of speed.
+   */
   ticksToSeconds(ticks) {
     return ticks * this.secPerTick;
   }
 
   /** Convert seconds to ticks. */
   secondsToTicks(seconds) {
-    console.warn('[WARN] secondsToTicks not tested / called yet.');  // May be used in the future
+    if (!Number.isFinite(seconds) || this.secPerTick <= 0) return 0;
     return seconds / this.secPerTick;
   }
 
@@ -85,8 +107,8 @@ class TimingState {
 }
 
 const timing = new TimingState();
-let rafId = 0;           // UI loop handle
-let suppressFirstSynthRead = false; // Skip one synth tick read on play to avoid flicker
+let rafId = 0;                       // UI loop handle
+let suppressFirstSynthRead = false;  // Skip one synth tick read on play to avoid flicker
 let lastUi = { cur: '', tot: '', seek: '' };
 let pauseLowPowerTimer = 0;
 
@@ -111,6 +133,13 @@ const loopModeField = document.getElementById('loopModeField');
 const loopModeTrack = document.getElementById('loopModeTrack');
 const loopModePlaylist = document.getElementById('loopModePlaylist');
 const sf2Input = document.getElementById('sf2Input');
+const midiTempoDefinedToggle = document.getElementById('midiTempoDefinedToggle');
+const tempoBaseInput = document.getElementById('tempoBaseInput');
+const tempoEffectiveInput = document.getElementById('tempoEffectiveInput');
+const tempoFactorSlider = document.getElementById('tempoFactorSlider');
+const tempoFactorValueEl = document.getElementById('tempoFactorValue');
+const tempoFactorResetBtn = document.getElementById('tempoFactorResetBtn');
+const tempoControlsEl = document.querySelector('.tempo-controls');
 const sf2Select = document.getElementById('sf2Select');
 const refreshSf2Btn = document.getElementById('refreshSf2Btn');
 const testBeepBtn = document.getElementById('testBeepBtn');
@@ -118,25 +147,42 @@ const testChordBtn = document.getElementById('testChordBtn');
 const playDemoBtn = document.getElementById('playDemoBtn');
 
 // Disable MIDI Test button until synth and SF2 are loaded
-if (testChordBtn) testChordBtn.disabled = true;
+testChordBtn.disabled = true;
 
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
 /** Log debug messages */
 function debug(message, ...args) {
-  console.log('[DEBUG]', message, ...args); 
+  console.log('[DEBUG]', message, ...args);
 }
 
 /** Set play/pause button icon and aria-label consistently. */
 function setPlayPauseIcon(isPlayingState) {
-  try {
-    if (!playPauseBtn) return;
-    playPauseBtn.textContent = isPlayingState ? '⏸️' : '▶️';
-    playPauseBtn.setAttribute('title', isPlayingState ? 'Pause' : 'Play');
-  } catch (error) {
-    console.error('[ERROR] Failed to set play/pause icon:', error);
+  playPauseBtn.textContent = isPlayingState ? '⏸️' : '▶️';
+  playPauseBtn.setAttribute('title', isPlayingState ? 'Pause' : 'Play');
+}
+
+/**
+ * True when keyboard shortcuts should not run (focus in a text-entry or native arrow/space navigation control).
+ * Excludes button-like inputs (checkbox, range, etc.) so shortcuts still work from those.
+ */
+function isKeyboardShortcutSuppressed(target) {
+  if (!target || target.nodeType !== Node.ELEMENT_NODE) return false;
+  const field = target.closest('input, textarea, select, [contenteditable="true"]');
+  if (!field) return false;
+  if (field.isContentEditable && field.getAttribute('contenteditable') !== 'false') return true;
+  if (field.tagName === 'TEXTAREA') return !(field.disabled || field.readOnly);
+  if (field.tagName === 'SELECT') return !field.disabled;
+  if (field.tagName === 'INPUT') {
+    if (field.disabled || field.readOnly) return false;
+    const type = (field.type || 'text').toLowerCase();
+    const noCharEntry = new Set([
+      'button', 'checkbox', 'radio', 'range', 'file', 'submit', 'reset', 'hidden', 'image', 'color'
+    ]);
+    return !noCharEntry.has(type);
   }
+  return true;
 }
 
 /** Safely call a player method with error handling. */
@@ -238,10 +284,10 @@ function createPlaylistItem(name) {
     const indexInList = [...playlistEl.children].indexOf(listItem);
     if (indexInList === currentIndex) {
       stopTrack();
-      currentIndex = -1;
-      trackTitleEl.textContent = 'No track loaded';
+      setCurrentIndex(-1);
+      trackTitleEl.textContent = '—';
     } else if (indexInList < currentIndex) {
-      currentIndex -= 1;
+      setCurrentIndex(currentIndex - 1);
     }
     playlist.splice(indexInList, 1);
     listItem.remove();
@@ -264,21 +310,151 @@ function createPlaylistItem(name) {
 }
 /** Whether the Loop checkbox is on (Track/Playlist radios are only active when this is true). */
 function isLoopEnabled() {
-  return !!(loopEnableToggle && loopEnableToggle.checked);
+  return loopEnableToggle.checked;
 }
 
 /** @returns {'track' | 'playlist'} */
 function getLoopMode() {
-  if (loopModeTrack && loopModeTrack.checked) return 'track';
-  return 'playlist';
+  return loopModeTrack.checked ? 'track' : 'playlist';
 }
 
 /** Enable/disable loop mode radios to match the Loop checkbox; dim container when off. */
 function syncLoopModeRadiosUi() {
   const enabled = isLoopEnabled();
-  if (loopModeField) loopModeField.classList.toggle('loop-mode--disabled', !enabled);
-  if (loopModeTrack) loopModeTrack.disabled = !enabled;
-  if (loopModePlaylist) loopModePlaylist.disabled = !enabled;
+  loopModeField.classList.toggle('loop-mode--disabled', !enabled);
+  loopModeTrack.disabled = !enabled;
+  loopModePlaylist.disabled = !enabled;
+}
+
+// ---------------------------------------------------------------------------
+// Tempo (FluidSynth internal multiplier)
+// All changes go through setTempoState() so UI + engine stay aligned.
+// ---------------------------------------------------------------------------
+
+/** Set currentIndex and sync tempo control availability. */
+function setCurrentIndex(i) {
+  currentIndex = i;
+  syncTempoControlsAvailability();
+}
+
+/** Returns store T_ref if valid, otherwise DEFAULT_BPM. */
+function getTrackRefBpmSafe() {
+  const t = tempoStore.trackRefBpm;
+  return (t > 0 && Number.isFinite(t)) ? t : DEFAULT_BPM;
+}
+
+/** µs per quarter note → BPM (60 seconds = 60e6 µs per minute). */
+function usPerQuarterToBpm(us) {
+  if (typeof us !== 'number' || us <= 0) return NaN;
+  return 60_000_000 / us;
+}
+
+function isMidiTempoDefinedChecked() {
+  return midiTempoDefinedToggle.checked;
+}
+
+function getTempoFactorFromSlider() {
+  const v = Number(tempoFactorSlider.value);
+  return Number.isFinite(v) ? v : TEMPO_FACTOR_DEFAULT;
+}
+
+/** Two-decimal readout for the speed slider (tabular width fixed in CSS). */
+function formatTempoFactorReadout(factor) {
+  const f = Number(factor);
+  return Number.isFinite(f) ? f.toFixed(2) : TEMPO_FACTOR_DEFAULT.toFixed(2);
+}
+
+function updateTempoFactorReadout() {
+  tempoFactorValueEl.textContent = formatTempoFactorReadout(getTempoFactorFromSlider());
+}
+
+/** Apply MANUAL_BPM_* to the base BPM number input; constants are the single source of truth (not index.html). */
+function applyTempoBaseInputBounds() {
+  tempoBaseInput.min = String(MANUAL_BPM_MIN);
+  tempoBaseInput.max = String(MANUAL_BPM_MAX);
+}
+
+/** Apply TEMPO_FACTOR_* to the Speed × range input; constants are the single source of truth (not index.html). */
+function applyTempoFactorSliderDomFromConstants() {
+  tempoFactorSlider.min = String(TEMPO_FACTOR_MIN);
+  tempoFactorSlider.max = String(TEMPO_FACTOR_MAX);
+  tempoFactorSlider.step = String(TEMPO_FACTOR_STEP);
+  tempoFactorSlider.value = String(TEMPO_FACTOR_DEFAULT);
+  updateTempoFactorReadout();
+}
+
+/** Active base BPM: file reference when MIDI-defined, else user field (HTML min/max enforces range). */
+function getActiveBaseBpm() {
+  const Tref = getTrackRefBpmSafe();
+  if (isMidiTempoDefinedChecked()) return Tref;
+  const raw = Number(tempoBaseInput.value);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    console.warn('[WARN] Manual BPM invalid; using reference BPM', Tref);
+    return Tref;
+  }
+  return raw;
+}
+
+/**
+ * Internal multiplier: factor × (T_active / T_ref). Matches uniform scaling of all MIDI tempo events.
+ */
+function computeInternalTempoMultiplier() {
+  const factor = getTempoFactorFromSlider();
+  const Tactive = getActiveBaseBpm();
+  return factor * (Tactive / getTrackRefBpmSafe());
+}
+
+function formatBpmForDisplay(bpm) {
+  if (typeof bpm !== 'number' || !Number.isFinite(bpm)) return '—';
+  return String(Math.round(bpm * 100) / 100);
+}
+
+function updateTempoEffectiveDisplay() {
+  const eff = getActiveBaseBpm() * getTempoFactorFromSlider();
+  tempoEffectiveInput.value = formatBpmForDisplay(eff);
+  updateTempoFactorReadout();
+}
+
+/** Grey out tempo block when no track; lock base field when using MIDI reference. */
+function syncTempoControlsAvailability() {
+  const hasTrack = currentIndex >= 0 && getTrackCount() > 0;
+  tempoControlsEl.classList.toggle('tempo-controls--inactive', !hasTrack);
+  midiTempoDefinedToggle.disabled = !hasTrack;
+  tempoFactorSlider.disabled = !hasTrack;
+  tempoFactorResetBtn.disabled = !hasTrack;
+  tempoBaseInput.disabled = !hasTrack || isMidiTempoDefinedChecked();
+}
+
+/** After load or when turning MIDI-defined on: show T_ref in the base field. */
+function syncTempoBaseFieldFromReference() {
+  if (isMidiTempoDefinedChecked()) {
+    tempoBaseInput.value = String(Math.round(getTrackRefBpmSafe() * 100) / 100);
+  }
+}
+
+/**
+ * Apply optional tempo patch, then refresh UI and/or FluidSynth so everything stays consistent.
+ *
+ * @param {object} [patch]
+ * @param {number} [patch.trackRefBpm]  File reference BPM (T_ref) when loading or re-reading tempo
+ * @param {boolean} [patch.skipUi]      Only push multiplier to engine (e.g. after resetPlayer cleared it)
+ * @param {boolean} [patch.skipEngine] Only refresh UI (no player write)
+ */
+async function setTempoState(patch = {}) {
+  if (patch.trackRefBpm !== undefined) {
+    const v = Number(patch.trackRefBpm);
+    tempoStore.trackRefBpm = (Number.isFinite(v) && v > 0) ? v : DEFAULT_BPM;
+  }
+  if (!patch.skipUi) {
+    syncTempoBaseFieldFromReference();
+    syncTempoControlsAvailability();
+    updateTempoEffectiveDisplay();
+  }
+  if (patch.skipEngine) return;
+  if (currentIndex < 0) return;
+  await ensurePlayer();
+  if (!player) return;
+  player.setPlayerTempoMultiplier(computeInternalTempoMultiplier());
 }
 
 /**
@@ -312,9 +488,9 @@ function getPrevIndexForButton() {
 async function ensurePlayer() {
   if (!player) {
     debug('Initializing JSSynthPlayer');
-    player = new window.JSSynthPlayer();
-    // Wait until adapter reports ready (adapter-provided readiness)
-    if (typeof player.waitForReady === 'function') {
+    player = new JSSynthPlayer();
+    // Constructor kicks off async _init(); block until WASM + audio graph are ready.
+    if (typeof player._waitForReady === 'function') {
       await player._waitForReady();
     }
     debug('JSSynthPlayer ready');
@@ -342,10 +518,10 @@ async function waitForSynthReady(maxMs = 8000) { await ensurePlayer(); return tr
 function checkForTrackEnd(context = 'unknown') {
   try {
     if (!isPlaying || !player || !player._synth) return;
-    
+
     const reachedEnd = (timing.totalTicks > 0 && timing.currentTick >= timing.totalTicks - 1);
     const synthStopped = (typeof player._synth.isPlayerPlaying === 'function' && !player._synth.isPlayerPlaying());
-    
+
     if (reachedEnd || synthStopped) {
       debugTickState(`${context} end detected`);
       debugTickState(`onEnded triggered from ${context}`);
@@ -357,46 +533,66 @@ function checkForTrackEnd(context = 'unknown') {
 }
 
 // ---------------------------------------------------------------------------
-// Timeline update loop
+// Timeline update loop (three focused helpers + coordinator)
 // ---------------------------------------------------------------------------
-/** Update timer labels and slider; keeps currentTick in sync while playing. */
-async function updateTimeline() {
-  if (!player) return;
-  const oldTick = timing.currentTick;
-  // When playing, keep internal currentTick in sync with synth
-  if (isPlaying) {
-    if (suppressFirstSynthRead) {
-      // Use current state for this frame; clear guard (avoids flicker on play after seek)
-      suppressFirstSynthRead = false;
-    } else {
-      const tick = await safeSynthCall(player._synth?.retrievePlayerCurrentTick);
-      if (tick !== null) timing.currentTick = tick;
-    }
+
+/** Sync currentTick from synth while playing. */
+async function syncTickFromSynth() {
+  if (!isPlaying) return;
+  if (suppressFirstSynthRead) {
+    // Clear guard; use current tick for this frame to avoid flicker right after seek+play
+    suppressFirstSynthRead = false;
+    return;
   }
-  // Lazy-load total/tempo (first-play guard)
+  const tick = await safeSynthCall(player._synth?.retrievePlayerCurrentTick);
+  if (tick !== null) timing.currentTick = tick;
+}
+
+/**
+ * Poll MIDI tempo from synth and update secPerTick.
+ * Lazy-loads total/tempo on first segment; then keeps secPerTick aligned each frame.
+ * secPerTick reflects the effective playback tempo (MIDI meta × internal speed multiplier).
+ */
+async function syncTempoFromSynth() {
+  // Nothing to poll until the FluidSynth player exists (load path still in progress).
+  if (!player._synth) return;
+
   if (timing.totalTicks === 0) {
+    // First usable frame: pull song length and initial MIDI tempo from the engine in one shot.
     const totalTicks = await safeSynthCall(player._synth?.retrievePlayerTotalTicks);
     const tempoUsPerQuarter = await safeSynthCall(player._synth?.retrievePlayerMIDITempo);
+    // Seeds totalTicks, tempo, PPQN resolution, and secPerTick so ticks ↔ seconds stay consistent.
     timing.updateFromSynth(totalTicks, tempoUsPerQuarter);
+    return;
   }
-  // Calculate UI strings only once
+
+  // Later frames: duration already known; only tempo can change (e.g. MIDI tempo meta during playback).
+  const tempoUsPerQuarter = await safeSynthCall(player._synth?.retrievePlayerMIDITempo);
+  if (typeof tempoUsPerQuarter === 'number' && tempoUsPerQuarter > 0) {
+    timing.tempoUsPerQuarter = tempoUsPerQuarter;
+    timing.setSecPerTick();
+  }
+}
+
+/** Render timeline labels and seek slider from current timing state (pure DOM update). */
+function renderTimeline() {
   const curStr = formatTimeStr(timing.ticksToSeconds(timing.currentTick));
   const totStr = formatTimeStr(timing.ticksToSeconds(timing.totalTicks));
-  const seekStr = timing.totalTicks > 0 ? Math.round((timing.currentTick / timing.totalTicks) * SEEK_SLIDER_MAX).toString() : '0';
-  
-  // Update DOM only when values actually change (efficient string comparison)
-  if (curStr !== lastUi.cur) { 
-    currentTimeEl.textContent = curStr; 
-    lastUi.cur = curStr; 
-  }
-  if (totStr !== lastUi.tot) { 
-    totalTimeEl.textContent = totStr; 
-    lastUi.tot = totStr; 
-  }
-  if (seekStr !== lastUi.seek) { 
-    seekEl.value = seekStr; 
-    lastUi.seek = seekStr; 
-  }
+  const seekStr = timing.totalTicks > 0
+    ? Math.round((timing.currentTick / timing.totalTicks) * SEEK_SLIDER_MAX).toString()
+    : '0';
+  // Update DOM only when values actually change (avoids unnecessary reflow)
+  if (curStr !== lastUi.cur) { currentTimeEl.textContent = curStr; lastUi.cur = curStr; }
+  if (totStr !== lastUi.tot) { totalTimeEl.textContent = totStr; lastUi.tot = totStr; }
+  if (seekStr !== lastUi.seek) { seekEl.value = seekStr; lastUi.seek = seekStr; }
+}
+
+/** Sync state from synth then render timeline labels and seek slider. */
+async function updateTimeline() {
+  if (!player) return;
+  await syncTickFromSynth();
+  await syncTempoFromSynth();
+  renderTimeline();
 }
 
 /** After PAUSE_LOW_POWER_MS, fully suspend/disable audio while paused. */
@@ -444,7 +640,7 @@ function stopUiLoop(){ if (rafId) { cancelAnimationFrame(rafId); rafId = 0; uiLo
 function onEnded() {
   debug('onEnded triggered');
   isPlaying = false;
-  playPauseBtn.textContent = '▶️';
+  setPlayPauseIcon(false);
   const len = getTrackCount();
   const loopOn = isLoopEnabled();
 
@@ -483,8 +679,8 @@ async function playTrack() {
   debugTickState('playTrack start');
   debug('Play requested at index', currentIndex, 'title:', trackTitleEl.textContent);
   // Sync synth to our internal position first
-  try { 
-    if (typeof player.seek === 'function') player.seek(timing.currentTick); 
+  try {
+    if (typeof player.seek === 'function') player.seek(timing.currentTick);
   } catch (error) {
     console.error('[ERROR] Failed to seek to current tick:', error);
   }
@@ -559,6 +755,8 @@ async function stopTrack() {
   safePlayerCall(player.setAudioState, AUDIO_STATE.stopped);
   stopUiLoop();
   clearPauseLowPowerTimer();
+  // resetPlayer (above) clears FluidSynth's internal tempo multiplier; reapply it.
+  await setTempoState({ skipUi: true });
 }
 
 /** Toggle between play and pause; loads first track if none active. */
@@ -589,6 +787,22 @@ async function rewindToBeginning() {
     await updateTimeline();
   } catch (e) {
     debug('Error seeking to beginning:', e);
+  }
+}
+
+/** Nudge playhead by Δ seconds of wall-clock playback time (same basis as timeline labels). */
+async function seekByWallClockSeconds(deltaSec) {
+  try {
+    await ensurePlayer();
+    if (!player || currentIndex < 0 || timing.totalTicks <= 0) return;
+    if (!Number.isFinite(timing.secPerTick) || timing.secPerTick <= 0) return;
+    const deltaTicks = Math.round(timing.secondsToTicks(deltaSec));
+    const target = Math.max(0, Math.min(timing.currentTick + deltaTicks, timing.totalTicks));
+    timing.currentTick = target;
+    if (typeof player.seek === 'function') player.seek(target);
+    await updateTimeline();
+  } catch (error) {
+    console.error('[ERROR] seekByWallClockSeconds failed:', error);
   }
 }
 
@@ -752,7 +966,7 @@ async function applySelectedSf2() {
     // Restore play state and position
     timing.currentTick = resumeTick;
     if (wasPlaying) await playTrack();
-    if (testChordBtn) testChordBtn.disabled = false;
+    testChordBtn.disabled = false;
     debug('SF2 switched to', displayName);
   } catch (e) {
     console.error('Failed to switch SF2', e);
@@ -794,9 +1008,9 @@ function parsePpqFromSmfHeader(arrayBuffer) {
   }
 }
 
-/** Set track title in the UI. */
+/** Update the "Now playing" title span. */
 function updateTitle(name) {
-  trackTitleEl.textContent = name || 'No track loaded';
+  trackTitleEl.textContent = name || '—';
 }
 
 /** Load track by index from playlist into the synth player. */
@@ -804,7 +1018,7 @@ function loadTrack(index) {
   if (index < 0 || index >= getTrackCount()) return Promise.resolve();
   ensurePlayer();
   const item = playlist[index];
-  currentIndex = index;
+  setCurrentIndex(index);
   highlightActive();
   updateTitle(item.name);
 
@@ -813,7 +1027,7 @@ function loadTrack(index) {
       debug('Loading track into player:', item.name, '(' + item.ext + ')');
       if (typeof player.pause === 'function') player.pause();
       await waitForSynthReady(5000);
-      
+
       // Initialize timing state BEFORE parsing PPQ
       timing.reset();
       parsePpqFromSmfHeader(arrayBuffer);
@@ -824,9 +1038,15 @@ function loadTrack(index) {
         const totalTicks = player._synth ? (await player._synth.retrievePlayerTotalTicks()) || 0 : 0;
         const tempoUsPerQuarter = player._synth ? (await player._synth.retrievePlayerMIDITempo()) || DEFAULT_TEMPO_US_PER_QUARTER : DEFAULT_TEMPO_US_PER_QUARTER;
         timing.updateFromSynth(totalTicks, tempoUsPerQuarter);
-      } catch (error) { 
+        let refBpm = usPerQuarterToBpm(tempoUsPerQuarter);
+        if (!Number.isFinite(refBpm) || refBpm <= 0) {
+          console.warn('[WARN] Invalid reference BPM from file; falling back to DEFAULT_BPM =', DEFAULT_BPM);
+          refBpm = DEFAULT_BPM;
+        }
+        await setTempoState({ trackRefBpm: refBpm });
+      } catch (error) {
         console.error('[ERROR] Failed to load timing from synth:', error);
-        timing.reset(); 
+        timing.reset();
       }
 
       // Centralized UI render
@@ -861,12 +1081,43 @@ nextBtn.addEventListener('click', nextTrack);
 
 // Toggles
 autoplayToggle.addEventListener('change', () => { autoplay = autoplayToggle.checked; });
-if (loopEnableToggle) {
-  syncLoopModeRadiosUi();
-  loopEnableToggle.addEventListener('change', () => {
-    syncLoopModeRadiosUi();
-  });
+syncLoopModeRadiosUi();
+loopEnableToggle.addEventListener('change', syncLoopModeRadiosUi);
+
+// Tempo: single delegated handler on the tempo section.
+// `change` fires for checkbox toggle and committed number input;
+// `input` fires for live slider drag (needs real-time engine update) and live number typing (readout only).
+async function onTempoControlChange(e) {
+  if (e.target === tempoEffectiveInput) return; // readonly readout
+  // Switching from MIDI-defined to manual: populate base field if empty
+  if (e.target === midiTempoDefinedToggle && !isMidiTempoDefinedChecked() && !tempoBaseInput.value.trim()) {
+    tempoBaseInput.value = String(Math.round(getTrackRefBpmSafe() * 100) / 100);
+  }
+  if (e.target === tempoBaseInput && isMidiTempoDefinedChecked()) return;
+  await setTempoState();
+  updateTimeline();
 }
+async function onTempoControlInput(e) {
+  if (e.target === tempoEffectiveInput) return; // readonly
+  if (e.target === tempoBaseInput) {
+    // Live readout while typing; engine push deferred to `change`
+    if (!isMidiTempoDefinedChecked()) updateTempoEffectiveDisplay();
+    return;
+  }
+  // Slider: full sync on every input for real-time engine update
+  await setTempoState();
+  updateTimeline();
+}
+tempoControlsEl.addEventListener('change', onTempoControlChange);
+tempoControlsEl.addEventListener('input', onTempoControlInput);
+// Reset: preset slider value then let the unified handler run
+tempoFactorResetBtn.addEventListener('click', () => {
+  tempoFactorSlider.value = String(TEMPO_FACTOR_DEFAULT);
+  tempoFactorSlider.dispatchEvent(new Event('input', { bubbles: true }));
+});
+applyTempoBaseInputBounds();
+applyTempoFactorSliderDomFromConstants();
+void setTempoState({ skipEngine: true });
 
 // Volume slider: maps 0..100 to gain 0..1
 volumeEl.addEventListener('input', async () => {
@@ -887,8 +1138,8 @@ seekEl.addEventListener('input', async () => {
     if (timing.totalTicks > 0) {
       const targetTicks = Math.floor((Number(seekEl.value) / SEEK_SLIDER_MAX) * timing.totalTicks);
       timing.currentTick = targetTicks;
-      try { 
-        if (typeof player.seek === 'function') player.seek(targetTicks); 
+      try {
+        if (typeof player.seek === 'function') player.seek(targetTicks);
       } catch (error) {
         console.error('[ERROR] Failed to seek to target ticks:', error);
       }
@@ -899,155 +1150,141 @@ seekEl.addEventListener('input', async () => {
   }
 });
 
-// Keyboard shortcuts: Space play/pause, arrows prev/next
+// Keyboard: Space play/pause, S stop, arrows ±5s wall-clock seek / rewind (disabled in text fields — see isKeyboardShortcutSuppressed)
 document.addEventListener('keydown', (e) => {
+  if (isKeyboardShortcutSuppressed(e.target)) return;
   if (e.code === 'Space') { e.preventDefault(); togglePlayPause(); }
   else if (e.key === 's' || e.key === 'S') { stopTrack(); }
-  else if (e.code === 'ArrowRight') { nextTrack(); }
-  else if (e.code === 'ArrowLeft') { prevTrack(); }
+  else if (e.code === 'ArrowRight') { e.preventDefault(); seekByWallClockSeconds(KEYBOARD_SEEK_STEP_SEC); }
+  else if (e.code === 'ArrowLeft') { e.preventDefault(); seekByWallClockSeconds(-KEYBOARD_SEEK_STEP_SEC); }
   else if (e.code === 'ArrowDown') { e.preventDefault(); rewindToBeginning(); }
 });
 
 // Diagnostics
 // Test Beep: always produces a short sine tone, even with no SF2/MIDI
-if (testBeepBtn) {
-  testBeepBtn.addEventListener('click', async () => {
-    await ensurePlayer();
-    try {
-      safePlayerCall(player.setAudioState, AUDIO_STATE.wakeUp);
-      const ac = player._audioContext;
-      const dest = player._gain || ac.destination;
-      const osc = ac.createOscillator();
-      const g = ac.createGain();
-      g.gain.value = 0.2;
-      osc.type = 'sine';
-      osc.frequency.value = 440;
-      osc.connect(g).connect(dest);
-      osc.start();
-      setTimeout(() => { 
-        try { 
-          osc.stop(); 
-          osc.disconnect(); 
-          g.disconnect(); 
-        } catch (error) {
-          console.error('[ERROR] Failed to cleanup test beep audio nodes:', error);
-        }
-      }, TEST_BEEP_DURATION_MS);
-      console.log('[DEBUG] Test beep played');
-    } catch (e) { console.error('[ERROR] Test beep failed:', e); }
-  });
-}
+testBeepBtn.addEventListener('click', async () => {
+  await ensurePlayer();
+  try {
+    safePlayerCall(player.setAudioState, AUDIO_STATE.wakeUp);
+    const ac = player._audioContext;
+    const dest = player._gain || ac.destination;
+    const osc = ac.createOscillator();
+    const g = ac.createGain();
+    g.gain.value = 0.2;
+    osc.type = 'sine';
+    osc.frequency.value = 440;
+    osc.connect(g).connect(dest);
+    osc.start();
+    setTimeout(() => {
+      try {
+        osc.stop();
+        osc.disconnect();
+        g.disconnect();
+      } catch (error) {
+        console.error('[ERROR] Failed to cleanup test beep audio nodes:', error);
+      }
+    }, TEST_BEEP_DURATION_MS);
+    console.log('[DEBUG] Test beep played');
+  } catch (e) { console.error('[ERROR] Test beep failed:', e); }
+});
 
 // Play demo file button: fetch and load demo/MIDI/demo.MID
-if (playDemoBtn) {
-  playDemoBtn.addEventListener('click', async () => {
-    try {
-      const response = await fetch(SOUND_DATA_PATH + 'MIDI/demo.MID');
-      if (!response.ok) throw new Error('Demo file not found');
-      
-      const blob = await response.blob();
-      const file = new File([blob], 'demo.MID', { type: 'audio/midi' });
-      
-      addToPlaylist([file]);
-      const newIndex = getTrackCount() - 1;
-      await loadTrack(newIndex);
-      playTrack();
-      
-      debug('Demo file loaded and playing');
-    } catch (error) {
-      console.error('[ERROR] Failed to load demo file:', error);
-      alert('Failed to load demo file. Make sure demo/MIDI/demo.MID exists.');
-    }
-  });
-}
+playDemoBtn.addEventListener('click', async () => {
+  try {
+    const response = await fetch(SOUND_DATA_PATH + 'MIDI/demo.MID');
+    if (!response.ok) throw new Error('Demo file not found');
+
+    const blob = await response.blob();
+    const file = new File([blob], 'demo.MID', { type: 'audio/midi' });
+
+    addToPlaylist([file]);
+    const newIndex = getTrackCount() - 1;
+    await loadTrack(newIndex);
+    playTrack();
+
+    debug('Demo file loaded and playing');
+  } catch (error) {
+    console.error('[ERROR] Failed to load demo file:', error);
+    alert('Failed to load demo file. Make sure demo/MIDI/demo.MID exists.');
+  }
+});
 
 // MIDI Test: pauses main playback, plays C–E–G on isolated synth, then resumes
 // This was necessary not to alter the main synth channel affectation, otherwise the used channel of the main synth
 // would be set to a neutral piano sound.
-if (testChordBtn) {
-  testChordBtn.addEventListener('click', async () => {
-    await ensurePlayer();
-    try {
-      safePlayerCall(player.setAudioState, 'wakeUp');
-      testChordBtn.disabled = true;
-      const wasPlaying = isPlaying;
-      if (wasPlaying) { await pauseTrack(); }
-      if (typeof player.playTestChord === 'function') { await player.playTestChord(); }
-      if (wasPlaying) { await playTrack(); }
-      console.log('[DEBUG] Test chord triggered');
-    } catch (e) {
-      console.error('[ERROR] Test chord failed:', e);
-    } finally {
-      // Re-enable button if any SF2 is loaded (via file input or dropdown)
-      const hasSf2File = sf2Input && sf2Input.files && sf2Input.files.length > 0;
-      const hasSf2Dropdown = sf2Select && sf2Select.value && sf2Select.value !== '';
-      if (hasSf2File || hasSf2Dropdown) { testChordBtn.disabled = false; }
-    }
-  });
-}
+testChordBtn.addEventListener('click', async () => {
+  await ensurePlayer();
+  try {
+    safePlayerCall(player.setAudioState, AUDIO_STATE.wakeUp);
+    testChordBtn.disabled = true;
+    const wasPlaying = isPlaying;
+    if (wasPlaying) { await pauseTrack(); }
+    if (typeof player.playTestChord === 'function') { await player.playTestChord(); }
+    if (wasPlaying) { await playTrack(); }
+    console.log('[DEBUG] Test chord triggered');
+  } catch (e) {
+    console.error('[ERROR] Test chord failed:', e);
+  } finally {
+    // Re-enable button if any SF2 is loaded (via file input or dropdown)
+    const hasSf2File = sf2Input.files && sf2Input.files.length > 0;
+    const hasSf2Dropdown = sf2Select.value && sf2Select.value !== '';
+    if (hasSf2File || hasSf2Dropdown) { testChordBtn.disabled = false; }
+  }
+});
 
 // SF2 file input: load custom SF2, enable MIDI Test; keep context suspended if idle
-if (sf2Input) {
-  sf2Input.addEventListener('change', async () => {
-    if (!sf2Input.files || sf2Input.files.length === 0) return;
-    const file = sf2Input.files[0];
-    debug('Custom SF2 selected (FluidSynth)', file.name, file.size);
+sf2Input.addEventListener('change', async () => {
+  if (!sf2Input.files || sf2Input.files.length === 0) return;
+  const file = sf2Input.files[0];
+  debug('Custom SF2 selected (FluidSynth)', file.name, file.size);
 
-    // Read SF2 file data as ArrayBuffer
-    const sf2FileData = await file.arrayBuffer();
+  // Read SF2 file data as ArrayBuffer
+  const sf2FileData = await file.arrayBuffer();
 
-    // If a custom with the same name already exists, ask to replace
-    const existingValue = `custom::${file.name}`;
-    const existingOption = Array.from(sf2Select?.options || []).find(opt => opt.value === existingValue);
-    if (existingOption) {
-      const replace = window.confirm(`A custom SF2 named "${file.name}" already exists. Replace it with the new file?`);
-      if (!replace) {
-        // Keep existing; select it and load
-        if (sf2Select) sf2Select.value = existingValue;
-        await applySelectedSf2();
-        return;
-      }
+  // If a custom with the same name already exists, ask to replace
+  const existingValue = `custom::${file.name}`;
+  const existingOption = Array.from(sf2Select.options).find(opt => opt.value === existingValue);
+  if (existingOption) {
+    const replace = window.confirm(`A custom SF2 named "${file.name}" already exists. Replace it with the new file?`);
+    if (!replace) {
+      // Keep existing; select it and load
+      sf2Select.value = existingValue;
+      await applySelectedSf2();
+      return;
     }
+  }
 
-    // Store/replace in registry
-    customSf2Registry.set(file.name, sf2FileData);
+  // Store/replace in registry
+  customSf2Registry.set(file.name, sf2FileData);
 
-    // Ensure an option exists (insert or update)
-    let opt = existingOption;
-    if (!opt) {
-      opt = document.createElement('option');
-      opt.value = `custom::${file.name}`;
-      opt.textContent = `Custom: ${file.name}`;
-      // Insert custom option at top of list (after placeholder if any)
-      if (sf2Select) {
-        if (sf2Select.firstChild) {
-          sf2Select.insertBefore(opt, sf2Select.firstChild.nextSibling);
-        } else {
-          sf2Select.appendChild(opt);
-        }
-      }
+  // Ensure an option exists (insert or update)
+  let opt = existingOption;
+  if (!opt) {
+    opt = document.createElement('option');
+    opt.value = `custom::${file.name}`;
+    opt.textContent = `Custom: ${file.name}`;
+    // Insert custom option at top of list (after placeholder if any)
+    if (sf2Select.firstChild) {
+      sf2Select.insertBefore(opt, sf2Select.firstChild.nextSibling);
     } else {
-      opt.textContent = `Custom: ${file.name}`;
+      sf2Select.appendChild(opt);
     }
+  } else {
+    opt.textContent = `Custom: ${file.name}`;
+  }
 
-    // Select and load via unified path
-    if (sf2Select) sf2Select.value = `custom::${file.name}`;
-    await applySelectedSf2();
+  // Select and load via unified path
+  sf2Select.value = `custom::${file.name}`;
+  await applySelectedSf2();
 
-    // Keep context suspended if idle
-    if (!isPlaying) {
-      safePlayerCall(player.setAudioState, AUDIO_STATE.stopped);
-    }
-  });
-}
+  // Keep context suspended if idle
+  if (!isPlaying) {
+    safePlayerCall(player.setAudioState, AUDIO_STATE.stopped);
+  }
+});
 
 // SoundFonts dropdown: initial fill, selection applies new SF2
-if (sf2Select) {
-  // Initial fill and wire events
-  refreshSf2List();
-  sf2Select.addEventListener('change', applySelectedSf2);
-}
+refreshSf2List();
+sf2Select.addEventListener('change', applySelectedSf2);
 // Rescan demo/Soundfonts directory and repopulate dropdown
-if (refreshSf2Btn) {
-  refreshSf2Btn.addEventListener('click', refreshSf2List);
-}
+refreshSf2Btn.addEventListener('click', refreshSf2List);

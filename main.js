@@ -1,5 +1,6 @@
 /* Main entry point for the MIDI Player application
- * Loads FluidSynth WASM, initializes js-synthesizer, and starts the app
+ * Loads FluidSynth WASM externals first, then imports the app module.
+ * The externals script must be loaded before js-synthesizer is used (it provides WASM globals).
  */
 
 // Import CSS
@@ -17,15 +18,6 @@ document.head.appendChild(externalsScript);
 // Wait for externals to load, then initialize everything
 externalsScript.onload = async () => {
   console.log('[Init] FluidSynth WASM loaded');
-  
-  // Import js-synthesizer and expose globally (needed by synthesizer-player.js)
-  window.JSSynth = await import('js-synthesizer');
-  console.log('[Init] js-synthesizer loaded');
-  
-  // Load app modules
-  await import('./synthesizer-player.js');
-  console.log('[Init] Synthesizer player loaded');
-  
   await import('./app.js');
   console.log('[Init] App initialized');
 };

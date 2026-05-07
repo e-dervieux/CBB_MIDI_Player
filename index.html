@@ -36,6 +36,11 @@
       </section>
 
       <section class="player">
+        <div class="now-playing" aria-live="polite">
+          <span class="now-playing-label">Now playing:</span>
+          <span class="now-playing-title" id="trackTitle">—</span>
+        </div>
+
         <div class="transport">
           <button id="prevBtn" title="Previous">⏮️</button>
           <button id="rewindBtn" title="Back to beginning">⏪</button>
@@ -73,8 +78,30 @@
           <span id="totalTime">00:00</span>
         </div>
 
-        <div class="now-playing" aria-live="polite">
-          <strong id="trackTitle">No track loaded</strong>
+        <div class="tempo-controls" title="Scale playback speed (FluidSynth internal tempo mode)">
+          <div class="tempo-row tempo-row-main">
+            <label class="tempo-check-label">
+              <input type="checkbox" id="midiTempoDefinedToggle" checked /> MIDI-defined tempo
+            </label>
+            <label class="tempo-field-label">Base BPM
+              <input type="number" id="tempoBaseInput" class="tempo-input tempo-input-base" step="1" disabled />
+            </label>
+            <label class="tempo-field-label">Effective BPM
+              <input type="text" id="tempoEffectiveInput" class="tempo-input tempo-input-effective" readonly tabindex="-1" value="—" />
+            </label>
+          </div>
+          <div class="tempo-row tempo-row-factor">
+            <div class="tempo-speed-row">
+              <label class="tempo-slider-label">
+                <span class="tempo-slider-heading">
+                  <span class="tempo-speed-prefix">Speed ×</span>
+                  <span id="tempoFactorValue" class="tempo-factor-readout">1.00</span>
+                </span>
+                <input type="range" id="tempoFactorSlider" disabled />
+              </label>
+              <button type="button" id="tempoFactorResetBtn" class="btn tempo-reset-btn" disabled>Reset</button>
+            </div>
+          </div>
         </div>
       </section>
 

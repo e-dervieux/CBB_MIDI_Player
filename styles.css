@@ -71,6 +71,21 @@ html, body {
   background: transparent;
 }
 
+.now-playing {
+  margin-bottom: 10px;
+  line-height: 1.35;
+}
+
+.now-playing-label {
+  color: var(--muted);
+  margin-right: 0.35em;
+}
+
+.now-playing-title {
+  color: var(--fg);
+  font-weight: 600;
+}
+
 .player .transport {
   display: flex;
   align-items: center;
@@ -161,16 +176,108 @@ html, body {
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 8px;
+  margin-top: 12px;
+}
+
+/* Tempo: reference BPM, effective BPM, speed multiplier (FluidSynth INTERNAL) */
+.tempo-controls {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 0.92rem;
+}
+
+.tempo-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+}
+
+.tempo-row-factor {
   margin-top: 10px;
+  align-items: center;
+}
+
+.tempo-speed-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+
+/* Fixed width: min 5 chars + decimal (tabular) so values like 0.50 / 2.00 do not jiggle the row */
+.tempo-factor-readout {
+  display: inline-block;
+  min-width: 6ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.tempo-slider-heading {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35em;
+}
+
+.tempo-speed-prefix {
+  color: var(--muted);
+}
+
+.tempo-check-label,
+.tempo-field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.tempo-slider-label {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.tempo-field-label {
+  flex-wrap: wrap;
+}
+
+.tempo-input {
+  width: 5.5rem;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg);
+}
+
+.tempo-input-base:disabled,
+.tempo-input-effective {
+  opacity: 0.85;
+}
+
+.tempo-slider-label input[type="range"] {
+  width: 140px;
+  vertical-align: middle;
+}
+
+.tempo-reset-btn {
+  padding: 6px 12px;
+  font-size: 0.88rem;
+}
+
+.tempo-controls.tempo-controls--inactive {
+  opacity: 0.55;
 }
 
 input[type="range"] {
   width: 100%;
-}
-
-.now-playing {
-  margin-top: 8px;
-  color: var(--muted);
 }
 
 .playlist h2 {
