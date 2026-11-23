@@ -20,6 +20,7 @@ This player comes with the [Microsoft GS Wavetable Synth](https://web.archive.or
 
 ## Features
 - Playlist of local MIDI files (you can add multiple tracks at once)
+- **MIDI file check**: files that may play badly (damaged data, long silent ending, many instrument tracks on one channel, no instrument selection, notes never released, sample-library keyswitches) get a ⚠️ in the playlist; hover it for details
 - Load SF2 from file or pick one from the `Soundfonts/` dropdown (there is a folder scan to automatically add SF2 files to the dropdown)
 - Timeline/seek, Play/Pause/Stop/Rewind
 - **Volume**: ×1 (slider midpoint) is FluidSynth's default gain (0.2), which leaves headroom for dense files; the slider goes from ×0 to ×10, and the orange/red zone warns that loud files may saturate. A soft limiter (linear up to 0.8, tanh shoulder towards 1) keeps the output from hard clipping.

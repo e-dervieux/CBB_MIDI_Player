@@ -393,6 +393,11 @@ input[type="range"] {
   border-radius: var(--radius);
 }
 
+.playlist-warning {
+  margin-right: var(--space-xs);
+  cursor: help;
+}
+
 .playlist li.active {
   background: var(--surface-2);
   outline: 1px solid var(--accent);

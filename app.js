@@ -6,6 +6,7 @@
 
 import { DEFAULT_BPM, DEFAULT_TEMPO_US_PER_QUARTER, DEFAULT_BUNDLED_SF2_NAME } from './playback-defaults.js';
 import { JSSynthPlayer } from './synthesizer-player.js';
+import { checkMidiFile } from './midi-file-check.js';
 
 // ---------------------------------------------------------------------------
 // Constants / Config
@@ -277,6 +278,7 @@ function createPlaylistItem(name) {
   titleSpan.className = 'title';
   titleSpan.textContent = name;
   const actionsContainer = document.createElement('span');
+  actionsContainer.className = 'playlist-actions';
   const playButton = document.createElement('button');
   playButton.textContent = 'Play';
   playButton.addEventListener('click', async () => {
@@ -895,10 +897,32 @@ function addToPlaylist(files) {
     const name = file.name;
     const ext = (name.split('.').pop() || '').toLowerCase();
     if (!SUPPORTED_MIDI_EXTENSIONS.includes(ext)) continue;
-    playlist.push({ name, ext, file });
+    const item = { name, ext, file };
+    playlist.push(item);
     const listItem = createPlaylistItem(name);
     playlistEl.appendChild(listItem);
+    void checkPlaylistItem(item, listItem);
   }
+}
+
+/** Read the file once (cached for loadTrack) and flag the playlist entry if the MIDI check finds issues. */
+async function checkPlaylistItem(item, listItem) {
+  try {
+    item.arrayBuffer ??= await item.file.arrayBuffer();
+    const issues = checkMidiFile(item.arrayBuffer);
+    if (issues.length > 0) addPlaylistItemWarning(listItem, issues);
+  } catch (error) {
+    console.error('[ERROR] Failed to check MIDI file:', item.name, error);
+  }
+}
+
+/** Warning sign left of the Play button; hovering it lists the issues. */
+function addPlaylistItemWarning(listItem, issues) {
+  const warning = document.createElement('span');
+  warning.className = 'playlist-warning';
+  warning.textContent = '⚠️';
+  warning.title = ['This MIDI file may have some issues:', ...issues.map((issue) => `  - ${issue}`)].join('\n');
+  listItem.querySelector('.playlist-actions').prepend(warning);
 }
 
 // ---------------------------------------------------------------------------
