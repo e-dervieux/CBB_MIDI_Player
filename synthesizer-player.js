@@ -258,6 +258,9 @@ class JSSynthPlayer {
       this._lastSmfBytes = SMFbytes.slice();
       // Reset internal player so only the new file is queued.
       await this._safeSynthCall(this._synth, this._synth?.stopPlayer);
+      // MIDI system reset: stopPlayer only silences voices, so programs, controllers (sustain,
+      // modulation, expression…) and pitch bend would otherwise carry over into the next file.
+      await this._safeSynthCall(this._synth, this._synth?.midiSystemReset);
       await this._safeSynthCall(this._synth, this._synth?.resetPlayer);
       await this._synth.addSMFDataToPlayer(SMFbytes);
       this._currentTime = 0;
