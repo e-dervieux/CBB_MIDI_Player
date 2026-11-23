@@ -9,6 +9,7 @@
   --border: #2a2a32;
   --warn: #f5a524;
   --danger: #e5484d;
+  --dimmed-opacity: 0.45;
 }
 
 html, body {
@@ -151,7 +152,7 @@ html, body {
 }
 
 .loop-mode-field.loop-mode--disabled {
-  opacity: 0.45;
+  opacity: var(--dimmed-opacity);
 }
 
 .loop-mode-label {
@@ -168,14 +169,16 @@ html, body {
 
 /* Volume: ×1 at the slider midpoint; track turns orange above ×1, red from --volume-danger-start (set by app.js) */
 .volume {
-  display: inline-flex;
-  flex-direction: column;
+  display: inline-grid;
+  grid-template-columns: auto auto auto; /* icon | slider | readout */
   align-items: center;
-  gap: 6px;
+  gap: 6px 8px;
   margin-left: auto;
 }
 
-.volume-row {
+/* Reset, clip indicator and help sit on a second row, left-aligned with the 🔊 icon */
+.volume-actions {
+  grid-column: 1 / -1;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -232,6 +235,17 @@ html, body {
   height: auto;
   padding: 4px 10px;
   font-size: 0.88rem;
+}
+
+.clip-indicator {
+  font-size: 0.88rem;
+  opacity: var(--dimmed-opacity);
+}
+
+.clip-indicator.clip-indicator--active {
+  opacity: 1;
+  color: var(--danger);
+  font-weight: 700;
 }
 
 .volume-help {

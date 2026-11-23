@@ -1,7 +1,7 @@
 /* js-synthesizer adapter for this app
    - Wraps FluidSynth (WASM) via js-synthesizer (static ES import; init waits for WASM in _init).
    - Stable API used by app.js: loadSF2, loadMIDI, play, pause, seek, setPlayerTempoMultiplier,
-     setVolume, setOnAudioTick, playTestChord, setAudioState
+     setVolume, getVolume, setOnClip, resetClipDetection, setOnAudioTick, playTestChord, setAudioState
    - Output: each synth node applies master volume then a soft clipper, so samples never exceed ±1
    - Internal: isolated test synth for MIDI Test (so it never affects the main song)
 */
@@ -129,6 +129,8 @@ class JSSynthPlayer {
     // Synth nodes (volume + soft clip applied per sample, see _createSynthNode) → destination
     this._audioContext = new (window.AudioContext || window.webkitAudioContext)();
     this._volume = DEFAULT_VOLUME;
+    this._clipDetected = false;   // latched once the soft clipper engages (re-armed by resetClipDetection)
+    this._onClip = null;          // callback invoked when clipping is first detected
 
     // Synth state ------------------------------------------------------------
     this._synth = null;           // main synthesizer (FluidSynth)
@@ -159,6 +161,7 @@ class JSSynthPlayer {
   /**
    * Streaming audio node for a synth instance. Same as js-synthesizer's createAudioNode
    * (FluidSynth renders each block), plus master volume and soft clipping on every sample.
+   * Reports the first block where the clipper engages through the onClip callback.
    * @param {JSSynth.Synthesizer} synth main or test synthesizer
    * @returns {ScriptProcessorNode}
    * @private
@@ -168,9 +171,18 @@ class JSSynthPlayer {
     node.addEventListener('audioprocess', (ev) => {
       const buffer = ev.outputBuffer;
       synth.render(buffer);
+      let clipped = false;
       for (let c = 0; c < buffer.numberOfChannels; c++) {
         const samples = buffer.getChannelData(c);
-        for (let i = 0; i < samples.length; i++) samples[i] = softClip(this._volume * samples[i]);
+        for (let i = 0; i < samples.length; i++) {
+          const x = this._volume * samples[i];
+          if (Math.abs(x) > SOFT_CLIP_KNEE) clipped = true;
+          samples[i] = softClip(x);
+        }
+      }
+      if (clipped && !this._clipDetected) {
+        this._clipDetected = true;
+        if (this._onClip) this._onClip();
       }
     });
     return node;
@@ -261,6 +273,18 @@ class JSSynthPlayer {
    * @param {number} gain e.g. 1 = unity, 2 ≈ +6 dB
    */
   setVolume(gain) { this._volume = gain; }
+
+  /** @returns {number} current master volume (linear gain) */
+  getVolume() { return this._volume; }
+
+  /**
+   * Register a callback invoked once when the soft clipper starts engaging.
+   * @param {Function|null} fn callback or null to clear
+   */
+  setOnClip(fn) { this._onClip = (typeof fn === 'function') ? fn : null; }
+
+  /** Re-arm clip detection so the onClip callback fires again on the next clipped block. */
+  resetClipDetection() { this._clipDetected = false; }
 
   /** Start playback (resumes AudioContext if needed). */
   play() { this._audioContext.resume(); this._synth.playPlayer(); this._playing = true; }

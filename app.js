@@ -134,6 +134,7 @@ const seekEl = document.getElementById('seek');
 const volumeEl = document.getElementById('volume');
 const volumeValueEl = document.getElementById('volumeValue');
 const volumeResetBtn = document.getElementById('volumeResetBtn');
+const clipIndicatorEl = document.getElementById('clipIndicator');
 const currentTimeEl = document.getElementById('currentTime');
 const totalTimeEl = document.getElementById('totalTime');
 const trackTitleEl = document.getElementById('trackTitle');
@@ -416,6 +417,12 @@ function setVolumeSliderGain(gain) {
   volumeEl.value = String(volumeGainToPosition(gain) * VOLUME_SLIDER_MAX);
 }
 
+/** Latched clip indicator: set by the player's onClip callback, cleared when the volume is lowered. */
+function setClipIndicator(clipping) {
+  clipIndicatorEl.textContent = clipping ? 'CLIPPING!' : 'No clipping yet';
+  clipIndicatorEl.classList.toggle('clip-indicator--active', clipping);
+}
+
 function updateVolumeReadout() {
   volumeValueEl.textContent = `×${getVolumeGainFromSlider().toFixed(2)}`;
 }
@@ -542,6 +549,7 @@ async function ensurePlayer() {
     }
     debug('JSSynthPlayer ready');
     player.setVolume(getVolumeGainFromSlider());
+    player.setOnClip(() => setClipIndicator(true));
     // UI loop will start on first play to reduce idle CPU
     // Subscribe to audio heartbeat so onEnded triggers in background tabs
     if (typeof player.setOnAudioTick === 'function') {
@@ -1175,6 +1183,11 @@ volumeEl.addEventListener('input', async () => {
     await ensurePlayer();
     const gain = getVolumeGainFromSlider();
     debug('Volume set', gain);
+    // Lowering the volume clears the clip indicator until clipping happens again
+    if (gain < player.getVolume()) {
+      player.resetClipDetection();
+      setClipIndicator(false);
+    }
     player.setVolume(gain);
   } catch (error) {
     console.error('[ERROR] Failed to set volume:', error);
