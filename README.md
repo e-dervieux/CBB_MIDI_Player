@@ -21,7 +21,8 @@ This player comes with the [Microsoft GS Wavetable Synth](https://web.archive.or
 ## Features
 - Playlist of local MIDI files (you can add multiple tracks at once)
 - Load SF2 from file or pick one from the `Soundfonts/` dropdown (there is a folder scan to automatically add SF2 files to the dropdown)
-- Timeline/seek, volume, Play/Pause/Stop/Rewind
+- Timeline/seek, Play/Pause/Stop/Rewind
+- **Volume**: ×1 (slider midpoint) is FluidSynth's default gain (0.2), which leaves headroom for dense files; the slider goes from ×0 to ×10, and the orange/red zone warns that loud files may saturate. A soft limiter (linear up to 0.8, tanh shoulder towards 1) keeps the output from hard clipping.
 - **Tempo**: boxed control under the timeline — **MIDI-defined tempo** uses the file’s **initial** BPM (T_ref) as the base BPM; turn it off to type a custom base BPM. **Speed ×** applies an extra factor (0.5–2, **Reset** → 1) with a numeric readout. Playback uses FluidSynth’s internal tempo mode so all tempo changes in the file are scaled together. **Effective BPM** is base × speed (at the reference point). The **timeline** elapsed/total labels show **playback (wall‑clock) time**: slower speed means a longer displayed total duration and a larger elapsed time for the same position in the file (the seek bar remains proportional to tick position). If the file never sets tempo (or it cannot be read), a conventional default **120 BPM** applies.
 - Autoplay (plays the next track when the current one ends) and **Loop** with a mode: **Track** (repeat the current item) or **Playlist** (advance and wrap at the end of the list). The Track/Playlist choices are disabled until you turn Loop on.
 - “Audio Test” (should play a 1 s test tone) and “MIDI Test” (should play a short MIDI test using a piano sound) buttons

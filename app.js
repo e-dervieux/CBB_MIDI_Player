@@ -32,6 +32,14 @@ const TEMPO_FACTOR_MIN = 0.5;
 const TEMPO_FACTOR_MAX = 2;
 const TEMPO_FACTOR_STEP = 0.05;
 const TEMPO_FACTOR_DEFAULT = 1;
+/**
+ * Volume slider: position 0…VOLUME_SLIDER_MAX, midpoint = ×1 (unity master gain).
+ * Lower half is quadratic (0 → ×1), upper half is linear in dB (×1 → ×VOLUME_GAIN_MAX).
+ */
+const VOLUME_SLIDER_MAX = 100;
+const VOLUME_GAIN_MAX = 10;           // +20 dB
+const VOLUME_GAIN_DEFAULT = 1;
+const VOLUME_GAIN_DANGER = 3;         // Track turns red from here (orange between ×1 and this)
 /** Reasonable manual BPM input range (extremes still clamped into FluidSynth 0.001…1000 multiplier). */
 const MANUAL_BPM_MIN = 1;
 const MANUAL_BPM_MAX = 1000;
@@ -124,6 +132,8 @@ const prevBtn = document.getElementById('prevBtn');
 const nextBtn = document.getElementById('nextBtn');
 const seekEl = document.getElementById('seek');
 const volumeEl = document.getElementById('volume');
+const volumeValueEl = document.getElementById('volumeValue');
+const volumeResetBtn = document.getElementById('volumeResetBtn');
 const currentTimeEl = document.getElementById('currentTime');
 const totalTimeEl = document.getElementById('totalTime');
 const trackTitleEl = document.getElementById('trackTitle');
@@ -383,6 +393,43 @@ function applyTempoFactorSliderDomFromConstants() {
   updateTempoFactorReadout();
 }
 
+// ---------------------------------------------------------------------------
+// Volume
+// ---------------------------------------------------------------------------
+/** Slider position (0…1) → linear gain: quadratic below the midpoint, dB-linear above, ×1 at 0.5. */
+function volumePositionToGain(position) {
+  if (position <= 0.5) return (2 * position) ** 2;
+  return VOLUME_GAIN_MAX ** (2 * position - 1);
+}
+
+/** Inverse of volumePositionToGain. */
+function volumeGainToPosition(gain) {
+  if (gain <= 1) return Math.sqrt(gain) / 2;
+  return (1 + Math.log(gain) / Math.log(VOLUME_GAIN_MAX)) / 2;
+}
+
+function getVolumeGainFromSlider() {
+  return volumePositionToGain(Number(volumeEl.value) / VOLUME_SLIDER_MAX);
+}
+
+function setVolumeSliderGain(gain) {
+  volumeEl.value = String(volumeGainToPosition(gain) * VOLUME_SLIDER_MAX);
+}
+
+function updateVolumeReadout() {
+  volumeValueEl.textContent = `×${getVolumeGainFromSlider().toFixed(2)}`;
+}
+
+/** Apply VOLUME_* to the volume range input and its track colors; constants are the single source of truth (not index.html). */
+function applyVolumeSliderDomFromConstants() {
+  volumeEl.min = '0';
+  volumeEl.max = String(VOLUME_SLIDER_MAX);
+  volumeEl.step = '1';
+  setVolumeSliderGain(VOLUME_GAIN_DEFAULT);
+  volumeEl.style.setProperty('--volume-danger-start', `${volumeGainToPosition(VOLUME_GAIN_DANGER) * 100}%`);
+  updateVolumeReadout();
+}
+
 /** Active base BPM: file reference when MIDI-defined, else user field (HTML min/max enforces range). */
 function getActiveBaseBpm() {
   const Tref = getTrackRefBpmSafe();
@@ -494,9 +541,7 @@ async function ensurePlayer() {
       await player._waitForReady();
     }
     debug('JSSynthPlayer ready');
-    // Set initial volume from slider
-    const initial = Number(volumeEl.value) / 100;
-    if (player._gain) player._gain.gain.value = initial;
+    player.setVolume(getVolumeGainFromSlider());
     // UI loop will start on first play to reduce idle CPU
     // Subscribe to audio heartbeat so onEnded triggers in background tabs
     if (typeof player.setOnAudioTick === 'function') {
@@ -1123,17 +1168,24 @@ applyTempoBaseInputBounds();
 applyTempoFactorSliderDomFromConstants();
 void setTempoState({ skipEngine: true });
 
-// Volume slider: maps 0..100 to gain 0..1
+// Volume slider: non-linear position → gain mapping (see volumePositionToGain)
 volumeEl.addEventListener('input', async () => {
+  updateVolumeReadout();
   try {
     await ensurePlayer();
-    const fractional = Number(volumeEl.value) / 100;
-    debug('Volume set', fractional);
-    if (player && player._gain) player._gain.gain.value = fractional;
+    const gain = getVolumeGainFromSlider();
+    debug('Volume set', gain);
+    player.setVolume(gain);
   } catch (error) {
     console.error('[ERROR] Failed to set volume:', error);
   }
 });
+// Reset: preset slider value then let the input handler run (same pattern as tempo reset)
+volumeResetBtn.addEventListener('click', () => {
+  setVolumeSliderGain(VOLUME_GAIN_DEFAULT);
+  volumeEl.dispatchEvent(new Event('input'));
+});
+applyVolumeSliderDomFromConstants();
 
 // Seek slider: maps 0..SEEK_SLIDER_MAX to 0..totalTicks, updates synth and UI immediately
 seekEl.addEventListener('input', async () => {
@@ -1171,13 +1223,12 @@ testBeepBtn.addEventListener('click', async () => {
   try {
     safePlayerCall(player.setAudioState, AUDIO_STATE.wakeUp);
     const ac = player._audioContext;
-    const dest = player._gain || ac.destination;
     const osc = ac.createOscillator();
     const g = ac.createGain();
     g.gain.value = 0.2;
     osc.type = 'sine';
     osc.frequency.value = 440;
-    osc.connect(g).connect(dest);
+    osc.connect(g).connect(ac.destination);
     osc.start();
     setTimeout(() => {
       try {

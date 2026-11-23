@@ -7,6 +7,8 @@
   --surface: #17171a;
   --surface-2: #1f1f24;
   --border: #2a2a32;
+  --warn: #f5a524;
+  --danger: #e5484d;
 }
 
 html, body {
@@ -164,11 +166,78 @@ html, body {
   cursor: default;
 }
 
+/* Volume: ×1 at the slider midpoint; track turns orange above ×1, red from --volume-danger-start (set by app.js) */
 .volume {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.volume-row {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  margin-left: auto;
+}
+
+.volume input[type="range"] {
+  --volume-track: linear-gradient(to right,
+    var(--muted) 0 50%,
+    var(--warn) 50% var(--volume-danger-start),
+    var(--danger) var(--volume-danger-start) 100%);
+  --volume-track-height: 4px;
+  --volume-thumb-size: 14px;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 140px;
+  background: transparent;
+}
+
+/* Track/thumb pseudo-elements are engine-specific and cannot share one selector list:
+   each engine rule only maps the shared variables above */
+.volume input[type="range"]::-webkit-slider-runnable-track {
+  height: var(--volume-track-height);
+  border-radius: calc(var(--volume-track-height) / 2);
+  background: var(--volume-track);
+}
+
+.volume input[type="range"]::-moz-range-track {
+  height: var(--volume-track-height);
+  border-radius: calc(var(--volume-track-height) / 2);
+  background: var(--volume-track);
+}
+
+.volume input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  margin-top: calc((var(--volume-track-height) - var(--volume-thumb-size)) / 2); /* WebKit does not centre the thumb on the track */
+  width: var(--volume-thumb-size);
+  height: var(--volume-thumb-size);
+  border: none;
+  border-radius: 50%;
+  background: var(--fg);
+}
+
+.volume input[type="range"]::-moz-range-thumb {
+  width: var(--volume-thumb-size);
+  height: var(--volume-thumb-size);
+  border: none;
+  border-radius: 50%;
+  background: var(--fg);
+}
+
+/* Overrides the large transport button style */
+.player .transport .volume-reset-btn {
+  min-width: 0;
+  height: auto;
+  padding: 4px 10px;
+  font-size: 0.88rem;
+}
+
+.volume-help {
+  color: var(--accent);
+  font-weight: 700;
+  cursor: help;
 }
 
 .timeline {
@@ -209,7 +278,8 @@ html, body {
 }
 
 /* Fixed width: min 5 chars + decimal (tabular) so values like 0.50 / 2.00 do not jiggle the row */
-.tempo-factor-readout {
+.tempo-factor-readout,
+.volume-readout {
   display: inline-block;
   min-width: 6ch;
   text-align: right;

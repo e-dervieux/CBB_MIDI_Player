@@ -1,7 +1,8 @@
 /* js-synthesizer adapter for this app
    - Wraps FluidSynth (WASM) via js-synthesizer (static ES import; init waits for WASM in _init).
    - Stable API used by app.js: loadSF2, loadMIDI, play, pause, seek, setPlayerTempoMultiplier,
-     setOnAudioTick, playTestChord, setAudioState
+     setVolume, setOnAudioTick, playTestChord, setAudioState
+   - Output: each synth node applies master volume then a soft clipper, so samples never exceed ±1
    - Internal: isolated test synth for MIDI Test (so it never affects the main song)
 */
 import { DEFAULT_BPM, DEFAULT_TEMPO_US_PER_QUARTER } from './playback-defaults.js';
@@ -10,11 +11,25 @@ import * as JSSynth from 'js-synthesizer';
 // ---------------------------------------------------------------------------
 // Local constants
 // ---------------------------------------------------------------------------
-const DEFAULT_GAIN = 0.7;                 // WebAudio default gain (0.0 to 1.0)
-const FLUIDSYNTH_GAIN = 5.0;              // FluidSynth internal gain (0.0 to 10.0)
+const DEFAULT_VOLUME = 1.0;               // Master volume (unity; app.js drives it from the volume slider)
+const FLUIDSYNTH_GAIN = 0.2;              // FluidSynth internal gain: its own default, kept low for headroom in dense passages
+const SOFT_CLIP_KNEE = 0.8;               // Soft clipper: identity below this level, smooth shoulder towards ±1 above
 const WAIT_FOR_READY_TIMEOUT_MS = 50;     // Timeout for waiting for the synthesizer to be ready
 const AUDIO_BUFFER_SIZE = 2048;           // Buffer size for synth audio node
 const TEST_CHORD_NOTE_DURATION_MS = 160;  // Duration per note in test chord
+
+/**
+ * Soft clipper: y = x up to the knee, then knee + (1 - knee)·tanh((|x| - knee) / (1 - knee)),
+ * which joins the identity with matching slope and asymptotes to ±1, so output never exceeds ±1.
+ * @param {number} x input sample
+ * @returns {number}
+ */
+function softClip(x) {
+  const magnitude = Math.abs(x);
+  if (magnitude <= SOFT_CLIP_KNEE) return x;
+  const headroom = 1 - SOFT_CLIP_KNEE;
+  return Math.sign(x) * (SOFT_CLIP_KNEE + headroom * Math.tanh((magnitude - SOFT_CLIP_KNEE) / headroom));
+}
 
 /**
  * JSSynthPlayer
@@ -111,10 +126,9 @@ class JSSynthPlayer {
 
   constructor() {
     // WebAudio pipeline ------------------------------------------------------
+    // Synth nodes (volume + soft clip applied per sample, see _createSynthNode) → destination
     this._audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    this._gain = this._audioContext.createGain();
-    this._gain.gain.value = DEFAULT_GAIN;
-    this._gain.connect(this._audioContext.destination);
+    this._volume = DEFAULT_VOLUME;
 
     // Synth state ------------------------------------------------------------
     this._synth = null;           // main synthesizer (FluidSynth)
@@ -124,8 +138,8 @@ class JSSynthPlayer {
     this._tickNode = null;        // background heartbeat node
     this._tickGain = null;        // silent gain for heartbeat
     this._onAudioTick = null;     // callback invoked on audio process
-    this._nodeConnected = false;  // whether main node is connected to gain
-    this._tickConnected = false;  // whether heartbeat → gain path is connected
+    this._nodeConnected = false;  // whether main node is connected to destination
+    this._tickConnected = false;  // whether heartbeat → destination path is connected
     this._idleSuspendTimer = null; // deferred AudioContext.suspend (see setIdle)
 
     // Isolated test synth (for MIDI Test) -----------------------------------
@@ -143,6 +157,26 @@ class JSSynthPlayer {
   }
 
   /**
+   * Streaming audio node for a synth instance. Same as js-synthesizer's createAudioNode
+   * (FluidSynth renders each block), plus master volume and soft clipping on every sample.
+   * @param {JSSynth.Synthesizer} synth main or test synthesizer
+   * @returns {ScriptProcessorNode}
+   * @private
+   */
+  _createSynthNode(synth) {
+    const node = this._audioContext.createScriptProcessor(AUDIO_BUFFER_SIZE, 0, 2);
+    node.addEventListener('audioprocess', (ev) => {
+      const buffer = ev.outputBuffer;
+      synth.render(buffer);
+      for (let c = 0; c < buffer.numberOfChannels; c++) {
+        const samples = buffer.getChannelData(c);
+        for (let i = 0; i < samples.length; i++) samples[i] = softClip(this._volume * samples[i]);
+      }
+    });
+    return node;
+  }
+
+  /**
    * Initialize js-synthesizer and bootstrap the audio graph.
    * Creates main synth and audio nodes, plus a silent heartbeat node to keep callbacks active
    * in background tabs (for instance, Firefox throttles requestAnimationFrame).
@@ -154,15 +188,15 @@ class JSSynthPlayer {
     if (JSSynth.Synthesizer.waitForWasmInitialized) {
       await JSSynth.Synthesizer.waitForWasmInitialized();
     }
-    // Main synthesizer + streaming audio node into shared gain.
+    // Main synthesizer + streaming audio node.
     this._synth = new JSSynth.Synthesizer();
     this._synth.init(this._audioContext.sampleRate);
-    // FluidSynth internal gain (separate from WebAudio GainNode).
+    // FluidSynth internal gain (separate from the master volume applied in _createSynthNode).
     if (typeof this._synth.setGain === 'function') {
       this._synth.setGain(FLUIDSYNTH_GAIN);
     }
-    this._node = this._synth.createAudioNode(this._audioContext, AUDIO_BUFFER_SIZE);
-    this._node.connect(this._gain);
+    this._node = this._createSynthNode(this._synth);
+    this._node.connect(this._audioContext.destination);
     this._nodeConnected = true;
     // Heartbeat worklet: fires on audio clock so end-of-track checks work when the tab is backgrounded.
     await this._audioContext.audioWorklet.addModule('heartbeat-worklet.js');
@@ -174,7 +208,7 @@ class JSSynthPlayer {
     };
     const g = this._audioContext.createGain();
     g.gain.value = 0; // Silent
-    heartbeatWorklet.connect(g).connect(this._gain);
+    heartbeatWorklet.connect(g).connect(this._audioContext.destination);
     this._tickNode = heartbeatWorklet;
     this._tickGain = g;
     this._tickConnected = true;
@@ -221,6 +255,12 @@ class JSSynthPlayer {
       throw error; // Re-throw to propagate the error
     }
   }
+
+  /**
+   * Set the master volume (linear gain). Above 1, loud passages may reach the soft clipper.
+   * @param {number} gain e.g. 1 = unity, 2 ≈ +6 dB
+   */
+  setVolume(gain) { this._volume = gain; }
 
   /** Start playback (resumes AudioContext if needed). */
   play() { this._audioContext.resume(); this._synth.playPlayer(); this._playing = true; }
@@ -286,8 +326,8 @@ class JSSynthPlayer {
       if (typeof this._testSynth.setGain === 'function') {
         this._testSynth.setGain(FLUIDSYNTH_GAIN);
       }
-      this._testNode = this._testSynth.createAudioNode(this._audioContext, AUDIO_BUFFER_SIZE);
-      this._testNode.connect(this._gain);
+      this._testNode = this._createSynthNode(this._testSynth);
+      this._testNode.connect(this._audioContext.destination);
       await this._testSynth.loadSFont(this._sfontBytes);
     } catch (error) {
       console.error('[ERROR] Failed to ensure test synth:', error);
@@ -365,7 +405,7 @@ class JSSynthPlayer {
     if (!this._node) return;
     if (enabled && !this._nodeConnected) {
       try {
-        this._node.connect(this._gain);
+        this._node.connect(this._audioContext.destination);
         this._nodeConnected = true;
       } catch (error) {
         console.error('[ERROR] Failed to connect main audio node:', error);
@@ -386,7 +426,7 @@ class JSSynthPlayer {
     if (enabled && !this._tickConnected) {
       try {
         this._tickNode.connect(this._tickGain);
-        this._tickGain.connect(this._gain);
+        this._tickGain.connect(this._audioContext.destination);
         this._tickConnected = true;
       } catch (error) {
         console.error('[ERROR] Failed to connect heartbeat node:', error);

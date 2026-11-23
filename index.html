@@ -67,8 +67,15 @@
           </div>
 
           <div class="volume">
-            <span>🔊</span>
-            <input id="volume" type="range" min="0" max="100" step="1" value="70" />
+            <div class="volume-row">
+              <span>🔊</span>
+              <input id="volume" type="range" />
+              <span id="volumeValue" class="volume-readout">×1.00</span>
+            </div>
+            <div class="volume-row">
+              <button type="button" id="volumeResetBtn" class="btn volume-reset-btn">Reset vol.</button>
+              <span class="volume-help" title="×1 = FluidSynth's default gain (0.2), deliberately low to keep headroom when many notes play at once, so some files sound quiet.&#10;Orange/red: loud or dense files may saturate. A soft limiter prevents hard clipping but adds distortion.">?</span>
+            </div>
           </div>
         </div>
 
