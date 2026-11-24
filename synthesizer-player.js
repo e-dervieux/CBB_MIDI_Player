@@ -299,12 +299,13 @@ class JSSynthPlayer {
    * FluidSynth FLUID_PLAYER_TEMPO_INTERNAL: multiply all MIDI tempo events uniformly.
    * Backed by Synthesizer.setPlayerTempo (PlayerSetTempoType.Internal).
    * @param {number} multiplier e.g. 0.5 halves speed, 2 doubles
+   * @returns {number|undefined} multiplier actually applied (after clamping), undefined if it could not be applied
    */
   setPlayerTempoMultiplier(multiplier) {
     const m = Number(multiplier);
     if (!Number.isFinite(m)) {
       console.error('[ERROR] Invalid tempo multiplier:', multiplier);
-      return;
+      return undefined;
     }
     // FluidSynth internal tempo multiplier range clamping (see FLUID_PLAYER_TEMPO_INTERNAL definition in FluidSynth source)
     // i.e. https://github.com/FluidSynth/fluidsynth/blob/master/src/midi/fluid_midi.c
@@ -322,7 +323,9 @@ class JSSynthPlayer {
       this._synth.setPlayerTempo(internalType, clamped);
     } catch (error) {
       console.error('[ERROR] setPlayerTempo failed:', error);
+      return undefined;
     }
+    return clamped;
   }
 
   /**

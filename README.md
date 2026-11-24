@@ -20,11 +20,11 @@ This player comes with the [Microsoft GS Wavetable Synth](https://web.archive.or
 
 ## Features
 - Playlist of local MIDI files (you can add multiple tracks at once)
-- **MIDI file check**: files that may play badly (damaged data, long silent ending, many instrument tracks on one channel, no instrument selection, notes never released, sample-library keyswitches) get a ⚠️ in the playlist; hover it for details
+- **MIDI file check**: files that may play badly (damaged data, long silent ending, many instrument tracks on one channel, no instrument selection, notes never released, sample-library keyswitches, unsupported SMPTE timing) get a ⚠️ in the playlist; hover it for details
 - Load SF2 from file or pick one from the `Soundfonts/` dropdown (there is a folder scan to automatically add SF2 files to the dropdown)
 - Timeline/seek, Play/Pause/Stop/Rewind
 - **Volume**: ×1 (slider midpoint) is FluidSynth's default gain (0.2), which leaves headroom for dense files; the slider goes from ×0 to ×10, and the orange/red zone warns that loud files may saturate. A soft limiter (linear up to 0.8, tanh shoulder towards 1) keeps the output from hard clipping.
-- **Tempo**: boxed control under the timeline — **MIDI-defined tempo** uses the file’s **initial** BPM (T_ref) as the base BPM; turn it off to type a custom base BPM. **Speed ×** applies an extra factor (0.5–2, **Reset** → 1) with a numeric readout. Playback uses FluidSynth’s internal tempo mode so all tempo changes in the file are scaled together. **Effective BPM** is base × speed (at the reference point). The **timeline** elapsed/total labels show **playback (wall‑clock) time**: slower speed means a longer displayed total duration and a larger elapsed time for the same position in the file (the seek bar remains proportional to tick position). If the file never sets tempo (or it cannot be read), a conventional default **120 BPM** applies.
+- **Tempo**: a **speed** factor (×0.5–×2), and optionally a custom **base BPM** instead of the file's starting tempo (120 BPM if the file sets none). All tempo changes in the file are scaled together. **Effective BPM** shows the resulting starting tempo. The timeline follows the file's tempo changes and shows times at the current speed.
 - Autoplay (plays the next track when the current one ends) and **Loop** with a mode: **Track** (repeat the current item) or **Playlist** (advance and wrap at the end of the list). The Track/Playlist choices are disabled until you turn Loop on.
 - “Audio Test” (should play a 1 s test tone) and “MIDI Test” (should play a short MIDI test using a piano sound) buttons
 - Background-tab safe (will continue playing when the tab is in the background)
@@ -78,7 +78,7 @@ python3 -m http.server 8000 --directory dist
 4. Select a track in the playlist and press **Play**. Available controls:
    - Timeline seek and volume slider
    - **Autoplay**: plays next track when current one ends
-   - **Tempo** (under the timeline): MIDI-defined base vs custom base BPM, speed factor, effective BPM; initial/base value is the tempo at the start of the loaded file (not necessarily the tempo later if the piece changes speed)
+   - **Tempo** (under the timeline): speed factor, file or custom base BPM
    - **Loop** + **Track** or **Playlist**: when Loop is on, choose whether the same track repeats or the playlist wraps to the next item after each end
 5. **Keyboard shortcuts** (ignored while focus is in a text field, dropdown, or rich-text box):
    - `Space` — play/pause
@@ -90,7 +90,9 @@ python3 -m http.server 8000 --directory dist
 
 ## Known issues
 
-In rare cases, the string synths do not off, quickly turning the music into some horrid mess. This is under investigation and I don't know if it's a bug in the library (FluidSynth or its WASM port) or in my code. It might also be a problem in the MIDI files themselves, with no `OFF note` messages...
+**In rare cases, the string synths do not off**, quickly turning the music into some horrid mess. This is under investigation and I don't know if it's a bug in the library (FluidSynth or its WASM port) or in my code. It might also be a problem in the MIDI files themselves, with no `OFF note` messages...
+
+**SMPTE-timed MIDI files are not supported.** A few MIDI files (mostly made to sync music to video) count time in video frames (SMPTE timing) instead of beats. FluidSynth refuses to load them (see its [source code](https://github.com/FluidSynth/fluidsynth/blob/v2.4.6/src/midi/fluid_midi.c#L373): *"File uses SMPTE timing -- Not implemented yet"*), so they play nothing; the playlist flags them with a ⚠️.
 
 ## License
 

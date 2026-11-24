@@ -4,9 +4,10 @@
   - Clear separation of concerns and comments for maintainability
 */
 
-import { DEFAULT_BPM, DEFAULT_TEMPO_US_PER_QUARTER, DEFAULT_BUNDLED_SF2_NAME } from './playback-defaults.js';
+import { DEFAULT_BPM, DEFAULT_BUNDLED_SF2_NAME } from './playback-defaults.js';
 import { JSSynthPlayer } from './synthesizer-player.js';
 import { checkMidiFile } from './midi-file-check.js';
+import { TempoMap, readTempoMap } from './midi-file.js';
 
 // ---------------------------------------------------------------------------
 // Constants / Config
@@ -64,49 +65,29 @@ const tempoStore = {
 // ---------------------------------------------------------------------------
 class TimingState {
   constructor() {
-    this.currentTick = 0;                 // source of truth for playhead
-    this.totalTicks = 0;                  // track length in ticks
-    this.tempoUsPerQuarter = DEFAULT_TEMPO_US_PER_QUARTER; // last known tempo
-    this.ppq = DEFAULT_PPQ;               // PPQ from SMF header (division)
+    // Playback speed multiplier currently applied by FluidSynth (set by setTempoState); kept across tracks
+    this.speed = 1;
+    this.reset();
   }
 
   /** Reset to default values (used when loading new track). */
   reset() {
-    this.currentTick = 0;
-    this.totalTicks = 0;
-    this.tempoUsPerQuarter = DEFAULT_TEMPO_US_PER_QUARTER;
-    this.ppq = DEFAULT_PPQ;
-    this.secPerTick = 0;
-    this.setSecPerTick();
-  }
-
-  /** Update timing from synth values. */
-  updateFromSynth(totalTicks, tempoUsPerQuarter, ppq = this.ppq) {
-    if (typeof totalTicks === 'number' && totalTicks > 0) this.totalTicks = totalTicks;
-    if (typeof tempoUsPerQuarter === 'number' && tempoUsPerQuarter > 0) this.tempoUsPerQuarter = tempoUsPerQuarter;
-    if (typeof ppq === 'number' && ppq > 0) this.ppq = ppq;
-    this.setSecPerTick();
-  }
-
-  /** Calculate seconds per tick based on current tempo and PPQ. */
-  setSecPerTick() {
-    this.secPerTick = (this.tempoUsPerQuarter / 1e6) / this.ppq;
+    this.currentTick = 0;                              // source of truth for playhead
+    this.totalTicks = 0;                               // track length in ticks
+    this.tempoMap = new TempoMap(DEFAULT_PPQ, []);     // replaced by the file's own map once read
   }
 
   /**
-   * Convert ticks to seconds for the timeline labels.
-   * `secPerTick` comes from the synth-reported MIDI tempo (refreshed in `updateTimeline`), which
-   * reflects FluidSynth’s internal tempo multiplier, so these are listening-duration seconds, not a
-   * fixed score-length independent of speed.
+   * Ticks → seconds for the timeline: follows every tempo change of the file, divided by the speed
+   * multiplier (FluidSynth scales all tempos by it), so these are listening seconds at the current speed.
    */
   ticksToSeconds(ticks) {
-    return ticks * this.secPerTick;
+    return this.tempoMap.ticksToSeconds(ticks) / this.speed;
   }
 
-  /** Convert seconds to ticks. */
+  /** Seconds at the current speed → ticks (inverse of ticksToSeconds, fractional). */
   secondsToTicks(seconds) {
-    if (!Number.isFinite(seconds) || this.secPerTick <= 0) return 0;
-    return seconds / this.secPerTick;
+    return this.tempoMap.secondsToTicks(seconds * this.speed);
   }
 
   /** Clamp currentTick to valid range. */
@@ -510,7 +491,8 @@ async function setTempoState(patch = {}) {
   if (currentIndex < 0) return;
   await ensurePlayer();
   if (!player) return;
-  player.setPlayerTempoMultiplier(computeInternalTempoMultiplier());
+  const appliedSpeed = player.setPlayerTempoMultiplier(computeInternalTempoMultiplier());
+  if (appliedSpeed !== undefined) timing.speed = appliedSpeed;
 }
 
 /**
@@ -603,39 +585,21 @@ async function syncTickFromSynth() {
   if (tick !== null) timing.currentTick = tick;
 }
 
-/**
- * Poll MIDI tempo from synth and update secPerTick.
- * Lazy-loads total/tempo on first segment; then keeps secPerTick aligned each frame.
- * secPerTick reflects the effective playback tempo (MIDI meta × internal speed multiplier).
- */
-async function syncTempoFromSynth() {
-  // Nothing to poll until the FluidSynth player exists (load path still in progress).
-  if (!player._synth) return;
-
-  if (timing.totalTicks === 0) {
-    // First usable frame: pull song length and initial MIDI tempo from the engine in one shot.
-    const totalTicks = await safeSynthCall(player._synth?.retrievePlayerTotalTicks);
-    const tempoUsPerQuarter = await safeSynthCall(player._synth?.retrievePlayerMIDITempo);
-    // Seeds totalTicks, tempo, PPQN resolution, and secPerTick so ticks ↔ seconds stay consistent.
-    timing.updateFromSynth(totalTicks, tempoUsPerQuarter);
-    return;
-  }
-
-  // Later frames: duration already known; only tempo can change (e.g. MIDI tempo meta during playback).
-  const tempoUsPerQuarter = await safeSynthCall(player._synth?.retrievePlayerMIDITempo);
-  if (typeof tempoUsPerQuarter === 'number' && tempoUsPerQuarter > 0) {
-    timing.tempoUsPerQuarter = tempoUsPerQuarter;
-    timing.setSecPerTick();
-  }
+/** Read the song length from the synth if it was not available yet (e.g. right after loading). */
+async function syncTotalTicksFromSynth() {
+  if (!player._synth || timing.totalTicks > 0) return;
+  const totalTicks = await safeSynthCall(player._synth?.retrievePlayerTotalTicks);
+  if (typeof totalTicks === 'number' && totalTicks > 0) timing.totalTicks = totalTicks;
 }
 
 /** Render timeline labels and seek slider from current timing state (pure DOM update). */
 function renderTimeline() {
-  const curStr = formatTimeStr(timing.ticksToSeconds(timing.currentTick));
-  const totStr = formatTimeStr(timing.ticksToSeconds(timing.totalTicks));
-  const seekStr = timing.totalTicks > 0
-    ? Math.round((timing.currentTick / timing.totalTicks) * SEEK_SLIDER_MAX).toString()
-    : '0';
+  const currentSec = timing.ticksToSeconds(timing.currentTick);
+  const totalSec = timing.ticksToSeconds(timing.totalTicks);
+  const curStr = formatTimeStr(currentSec);
+  const totStr = formatTimeStr(totalSec);
+  // Seek slider position is proportional to time, so it moves steadily and matches the labels across tempo changes
+  const seekStr = totalSec > 0 ? Math.round((currentSec / totalSec) * SEEK_SLIDER_MAX).toString() : '0';
   // Update DOM only when values actually change (avoids unnecessary reflow)
   if (curStr !== lastUi.cur) { currentTimeEl.textContent = curStr; lastUi.cur = curStr; }
   if (totStr !== lastUi.tot) { totalTimeEl.textContent = totStr; lastUi.tot = totStr; }
@@ -646,7 +610,7 @@ function renderTimeline() {
 async function updateTimeline() {
   if (!player) return;
   await syncTickFromSynth();
-  await syncTempoFromSynth();
+  await syncTotalTicksFromSynth();
   renderTimeline();
 }
 
@@ -850,9 +814,9 @@ async function seekByWallClockSeconds(deltaSec) {
   try {
     await ensurePlayer();
     if (!player || currentIndex < 0 || timing.totalTicks <= 0) return;
-    if (!Number.isFinite(timing.secPerTick) || timing.secPerTick <= 0) return;
-    const deltaTicks = Math.round(timing.secondsToTicks(deltaSec));
-    const target = Math.max(0, Math.min(timing.currentTick + deltaTicks, timing.totalTicks));
+    // Add the step in seconds, then convert back to ticks: a 5 s jump stays 5 s even across a tempo change
+    const targetSec = timing.ticksToSeconds(timing.currentTick) + deltaSec;
+    const target = Math.max(0, Math.min(Math.round(timing.secondsToTicks(targetSec)), timing.totalTicks));
     timing.currentTick = target;
     if (typeof player.seek === 'function') player.seek(target);
     await updateTimeline();
@@ -1055,40 +1019,6 @@ async function applySelectedSf2() {
   }
 }
 
-/** Parse PPQ from SMF (Standard MIDI File) header and update timing.ppq if present.
- * more info here: https://web.archive.org/web/20250302231448/https://midimusic.github.io/tech/midispec.html
- * and here: https://web.archive.org/web/20250417220139/https://wiki.fourthwoods.com/standard_midi_file_format
- * @param {ArrayBuffer} arrayBuffer - the SMF file data
- * @returns {void}
-*/
-function parsePpqFromSmfHeader(arrayBuffer) {
-  try {
-    const dv = new DataView(arrayBuffer);
-    if (dv.getUint32(0, false) === 0x4D546864 /* 'MThd' */) {
-      const div = dv.getInt16(12, false);
-      if ((div & 0x8000) === 0) {
-        // PPQ format: use the division value as PPQ
-        if (div > 0) {
-          timing.ppq = div;
-        } else {
-          console.error('[ERROR] Invalid PPQ value, using default PPQ');
-          console.warn('[WARN] MIDI playback time-related info may be erroneous');
-          timing.ppq = DEFAULT_PPQ;
-        }
-        timing.setSecPerTick(); // Recalculate secPerTick with new PPQ
-      } else {
-        // SMPTE format: not supported, use default PPQ
-        console.error('[ERROR] SMPTE timing format not supported, using default PPQ');
-      }
-    } else {
-      // Not a valid SMF file
-      console.error('[ERROR] Invalid SMF file header, using default PPQ');
-    }
-  } catch (error) {
-    console.error('[ERROR] Failed to parse PPQ from SMF header:', error);
-  }
-}
-
 /** Update the "Now playing" title span. */
 function updateTitle(name) {
   trackTitleEl.textContent = name || '—';
@@ -1109,26 +1039,16 @@ function loadTrack(index) {
       if (typeof player.pause === 'function') player.pause();
       await waitForSynthReady(5000);
 
-      // Initialize timing state BEFORE parsing PPQ
       timing.reset();
-      parsePpqFromSmfHeader(arrayBuffer);
+      const tempoMap = readTempoMap(arrayBuffer);
+      if (tempoMap) timing.tempoMap = tempoMap;
+      else console.warn('[WARN] Could not read the tempo map; timeline assumes', DEFAULT_BPM, 'BPM');
 
       const u8 = new Uint8Array(arrayBuffer);
       await player.loadMIDI(u8);
-      try {
-        const totalTicks = player._synth ? (await player._synth.retrievePlayerTotalTicks()) || 0 : 0;
-        const tempoUsPerQuarter = player._synth ? (await player._synth.retrievePlayerMIDITempo()) || DEFAULT_TEMPO_US_PER_QUARTER : DEFAULT_TEMPO_US_PER_QUARTER;
-        timing.updateFromSynth(totalTicks, tempoUsPerQuarter);
-        let refBpm = usPerQuarterToBpm(tempoUsPerQuarter);
-        if (!Number.isFinite(refBpm) || refBpm <= 0) {
-          console.warn('[WARN] Invalid reference BPM from file; falling back to DEFAULT_BPM =', DEFAULT_BPM);
-          refBpm = DEFAULT_BPM;
-        }
-        await setTempoState({ trackRefBpm: refBpm });
-      } catch (error) {
-        console.error('[ERROR] Failed to load timing from synth:', error);
-        timing.reset();
-      }
+      await syncTotalTicksFromSynth();
+      // T_ref: the file's tempo at tick 0 (120 BPM when unset)
+      await setTempoState({ trackRefBpm: usPerQuarterToBpm(timing.tempoMap.initialUsPerQuarter) });
 
       // Centralized UI render
       await updateTimeline();
@@ -1224,12 +1144,13 @@ volumeResetBtn.addEventListener('click', () => {
 });
 applyVolumeSliderDomFromConstants();
 
-// Seek slider: maps 0..SEEK_SLIDER_MAX to 0..totalTicks, updates synth and UI immediately
+// Seek slider: maps 0..SEEK_SLIDER_MAX to 0..total duration (seconds → ticks), updates synth and UI immediately
 seekEl.addEventListener('input', async () => {
   try {
     await ensurePlayer();
     if (timing.totalTicks > 0) {
-      const targetTicks = Math.floor((Number(seekEl.value) / SEEK_SLIDER_MAX) * timing.totalTicks);
+      const targetSec = (Number(seekEl.value) / SEEK_SLIDER_MAX) * timing.ticksToSeconds(timing.totalTicks);
+      const targetTicks = Math.min(Math.floor(timing.secondsToTicks(targetSec)), timing.totalTicks);
       timing.currentTick = targetTicks;
       try {
         if (typeof player.seek === 'function') player.seek(targetTicks);
