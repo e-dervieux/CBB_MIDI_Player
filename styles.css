@@ -24,6 +24,8 @@
   --radius-large: 12px;
   /* Sizes */
   --slider-width: 140px;
+  --player-min-width: 900px;
+  --playlist-min-width: 200px;
 }
 
 html, body {
@@ -43,11 +45,21 @@ html, body {
   background: var(--surface);
 }
 
+/* Player and playlist share a row while both fit their min widths; otherwise the playlist wraps below,
+   and each then takes the full width and may shrink further (the player's controls wrap) */
 .app {
-  display: grid;
-  grid-template-columns: 2fr 1fr;
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--space-lg);
   padding: var(--space-lg);
+}
+
+.player {
+  flex: 1 1 var(--player-min-width);
+}
+
+.playlist {
+  flex: 1 1 var(--playlist-min-width);
 }
 
 .selectors, .player, .playlist, .synth {
@@ -58,7 +70,7 @@ html, body {
 }
 
 .selectors {
-  grid-column: 1 / -1;
+  flex-basis: 100%;
   display: flex;
   gap: var(--space-lg);
   align-items: end;
@@ -110,14 +122,21 @@ html, body {
   font-weight: 600;
 }
 
+/* Groups (buttons, autoplay, loop, volume) wrap onto new lines when the player narrows */
 .player .transport {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  gap: var(--space-sm) var(--space-lg);
+}
+
+/* The five big icon buttons stay together on one line */
+.transport-buttons {
+  display: flex;
   gap: var(--space-sm);
 }
 
-/* Direct children only: the big icon buttons, not buttons nested in the volume/loop groups */
-.player .transport > button {
+.transport-buttons > button {
   padding: var(--space-sm);
   border-radius: var(--radius);
   background: var(--surface-2);
@@ -133,7 +152,7 @@ html, body {
   font-size: var(--font-large);
 }
 
-.player .transport > button:hover {
+.transport-buttons > button:hover {
   border-color: var(--accent);
 }
 
@@ -141,7 +160,6 @@ html, body {
   display: inline-flex;
   align-items: center;
   gap: var(--space-sm);
-  margin-left: var(--space-md);
 }
 
 /* Loop controls in a small framed group */
@@ -149,12 +167,10 @@ html, body {
   display: inline-flex;
   flex-direction: column;
   gap: var(--space-sm);
-  margin-left: var(--space-md);
   padding: var(--space-sm);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface-2);
-  align-self: center;
 }
 
 .loop-enable-label {
@@ -195,7 +211,6 @@ html, body {
   grid-template-columns: auto auto auto; /* icon | slider | readout */
   align-items: center;
   gap: var(--space-sm);
-  margin-left: auto;
 }
 
 /* Reset, clip indicator and help sit on a second row, left-aligned with the 🔊 icon */
@@ -408,10 +423,4 @@ input[type="range"] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-@media (max-width: 900px) {
-  .app {
-    grid-template-columns: 1fr;
-  }
 }
