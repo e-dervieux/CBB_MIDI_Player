@@ -4,6 +4,7 @@
      setVolume, getVolume, setOnClip, resetClipDetection, setOnAudioTick, playTestChord, setAudioState
    - Output: each synth node applies master volume then a soft clipper, so samples never exceed ±1
    - Internal: isolated test synth for MIDI Test (so it never affects the main song)
+   - Shared with the audio export: softClip, PEAK_CEILING, clampTempoMultiplier, SharedSoundfont
 */
 import { DEFAULT_BPM, DEFAULT_TEMPO_US_PER_QUARTER } from './playback-defaults.js';
 import * as JSSynth from 'js-synthesizer';
@@ -14,9 +15,22 @@ import * as JSSynth from 'js-synthesizer';
 const DEFAULT_VOLUME = 1.0;               // Master volume (unity; app.js drives it from the volume slider)
 const FLUIDSYNTH_GAIN = 0.2;              // FluidSynth internal gain: its own default, kept low for headroom in dense passages
 const SOFT_CLIP_KNEE = 0.8;               // Soft clipper: identity below this level, smooth shoulder towards ±1 above
+// −0.5 dBFS: the export normalizes to this level (see audio-export.js); in playback, peaks above it mean
+// the soft clipper is distorting audibly ("CLIPPING!"), peaks between the knee and it only mildly
+export const PEAK_CEILING = 0.944;
+/** Clipping severity reported to the onClip callback, from least to most severe. */
+export const CLIP_LEVEL = Object.freeze({ none: 0, mild: 1, severe: 2 });
 const WAIT_FOR_READY_TIMEOUT_MS = 50;     // Timeout for waiting for the synthesizer to be ready
 const AUDIO_BUFFER_SIZE = 2048;           // Buffer size for synth audio node
 const TEST_CHORD_NOTE_DURATION_MS = 160;  // Duration per note in test chord
+// FluidSynth's internal tempo multiplier range (FLUID_PLAYER_TEMPO_INTERNAL), see
+// https://github.com/FluidSynth/fluidsynth/blob/master/src/midi/fluid_midi.c
+const TEMPO_MULTIPLIER_MIN = 0.001;
+const TEMPO_MULTIPLIER_MAX = 1000;
+// Support both legacy (PlayerSetTempoType) and current (Constants.PlayerSetTempoType) paths
+const INTERNAL_TEMPO_TYPE = JSSynth.Constants?.PlayerSetTempoType?.Internal
+  ?? JSSynth.PlayerSetTempoType?.Internal
+  ?? 0;
 
 /**
  * Soft clipper: y = x up to the knee, then knee + (1 - knee)·tanh((|x| - knee) / (1 - knee)),
@@ -24,11 +38,100 @@ const TEST_CHORD_NOTE_DURATION_MS = 160;  // Duration per note in test chord
  * @param {number} x input sample
  * @returns {number}
  */
-function softClip(x) {
+export function softClip(x) {
   const magnitude = Math.abs(x);
   if (magnitude <= SOFT_CLIP_KNEE) return x;
   const headroom = 1 - SOFT_CLIP_KNEE;
   return Math.sign(x) * (SOFT_CLIP_KNEE + headroom * Math.tanh((magnitude - SOFT_CLIP_KNEE) / headroom));
+}
+
+/**
+ * Clamp a tempo multiplier to FluidSynth's limits.
+ * @param {number} multiplier e.g. 0.5 halves speed, 2 doubles
+ * @returns {number}
+ */
+export function clampTempoMultiplier(multiplier) {
+  const clamped = Math.min(TEMPO_MULTIPLIER_MAX, Math.max(TEMPO_MULTIPLIER_MIN, multiplier));
+  if (clamped !== multiplier) {
+    console.warn('[WARN] Tempo multiplier clamped to FluidSynth limits:', multiplier, '→', clamped);
+  }
+  return clamped;
+}
+
+/** The FluidSynth WebAssembly module: global set by libfluidsynth-*.js (see main.js), as used by js-synthesizer. */
+const fluidsynth = () => globalThis.Module;
+
+/**
+ * A soundfont loaded once, lent to fresh synthesizers for offline rendering (audio export).
+ *
+ * Why fresh synthesizers: FluidSynth has no complete reset. fluid_synth_system_reset leaves sound ringing for
+ * about 0.7 s and keeps the reverb and chorus oscillators and filters running, so a reused synth renders a
+ * track slightly differently from a new one (measured: −28 dB of the previous track at first, −52 dB later).
+ * Renders must be exact: the export renders each track twice and relies on both passes being identical.
+ * Why lend the soundfont: loading it in every synth would cost a load per track and per pass, which takes
+ * seconds for large soundfonts. FluidSynth can attach an already-loaded soundfont to another synth
+ * (fluid_synth_add_sfont); renders were checked bit-identical to synths loading it themselves.
+ * js-synthesizer has no API for this, hence the direct FluidSynth calls on its `_synth` handles.
+ * Lifetime: the owner synth keeps the soundfont until close(); borrowers detach it before closing
+ * (fluid_synth_remove_sfont), since a synth frees the soundfonts it holds when deleted.
+ */
+export class SharedSoundfont {
+  /**
+   * @param {ArrayBuffer} sf2Bytes soundfont
+   * @param {number} sampleRate any (the owner never renders), e.g. the export's
+   * @returns {Promise<SharedSoundfont>}
+   */
+  static async load(sf2Bytes, sampleRate) {
+    const owner = new JSSynth.Synthesizer();
+    owner.init(sampleRate);
+    try {
+      const id = await owner.loadSFont(sf2Bytes);
+      return new SharedSoundfont(owner, fluidsynth()._fluid_synth_get_sfont_by_id(owner._synth, id));
+    } catch (error) {
+      owner.close();
+      throw error;
+    }
+  }
+
+  constructor(owner, sfont) {
+    this._owner = owner;
+    this._sfont = sfont; // fluid_sfont_t pointer
+  }
+
+  /**
+   * Fresh synthesizer set up like the playback one (same FluidSynth gain), with this soundfont and the MIDI
+   * file playing. Render it with `synth.render()`; give it back with releaseSynth().
+   * @param {number} sampleRate
+   * @param {ArrayBuffer} smfBytes Standard MIDI File
+   * @param {number} tempoMultiplier already within FluidSynth's limits (see clampTempoMultiplier)
+   * @returns {Promise<JSSynth.Synthesizer>}
+   */
+  async createSynth(sampleRate, smfBytes, tempoMultiplier) {
+    const synth = new JSSynth.Synthesizer();
+    synth.init(sampleRate);
+    fluidsynth()._fluid_synth_add_sfont(synth._synth, this._sfont);
+    try {
+      synth.setGain(FLUIDSYNTH_GAIN);
+      await synth.addSMFDataToPlayer(smfBytes);
+      synth.setPlayerTempo(INTERNAL_TEMPO_TYPE, tempoMultiplier);
+      await synth.playPlayer();
+    } catch (error) {
+      this.releaseSynth(synth);
+      throw error;
+    }
+    return synth;
+  }
+
+  /** Detach the soundfont from a synth made by createSynth, then close the synth. */
+  releaseSynth(synth) {
+    fluidsynth()._fluid_synth_remove_sfont(synth._synth, this._sfont);
+    synth.close();
+  }
+
+  /** Free the soundfont (after every borrower has been released). */
+  close() {
+    this._owner.close();
+  }
 }
 
 /**
@@ -129,8 +232,8 @@ class JSSynthPlayer {
     // Synth nodes (volume + soft clip applied per sample, see _createSynthNode) → destination
     this._audioContext = new (window.AudioContext || window.webkitAudioContext)();
     this._volume = DEFAULT_VOLUME;
-    this._clipDetected = false;   // latched once the soft clipper engages (re-armed by resetClipDetection)
-    this._onClip = null;          // callback invoked when clipping is first detected
+    this._clipLevel = CLIP_LEVEL.none; // worst clipping so far (cleared by resetClipDetection)
+    this._onClip = null;          // callback invoked when clipping gets worse
 
     // Synth state ------------------------------------------------------------
     this._synth = null;           // main synthesizer (FluidSynth)
@@ -161,7 +264,7 @@ class JSSynthPlayer {
   /**
    * Streaming audio node for a synth instance. Same as js-synthesizer's createAudioNode
    * (FluidSynth renders each block), plus master volume and soft clipping on every sample.
-   * Reports the first block where the clipper engages through the onClip callback.
+   * Reports through the onClip callback each time clipping gets worse (see CLIP_LEVEL).
    * @param {JSSynth.Synthesizer} synth main or test synthesizer
    * @returns {ScriptProcessorNode}
    * @private
@@ -171,18 +274,21 @@ class JSSynthPlayer {
     node.addEventListener('audioprocess', (ev) => {
       const buffer = ev.outputBuffer;
       synth.render(buffer);
-      let clipped = false;
+      let peak = 0;
       for (let c = 0; c < buffer.numberOfChannels; c++) {
         const samples = buffer.getChannelData(c);
         for (let i = 0; i < samples.length; i++) {
           const x = this._volume * samples[i];
-          if (Math.abs(x) > SOFT_CLIP_KNEE) clipped = true;
+          peak = Math.max(peak, Math.abs(x));
           samples[i] = softClip(x);
         }
       }
-      if (clipped && !this._clipDetected) {
-        this._clipDetected = true;
-        if (this._onClip) this._onClip();
+      const level = peak > PEAK_CEILING ? CLIP_LEVEL.severe
+        : peak > SOFT_CLIP_KNEE ? CLIP_LEVEL.mild
+          : CLIP_LEVEL.none;
+      if (level > this._clipLevel) {
+        this._clipLevel = level;
+        if (this._onClip) this._onClip(level);
       }
     });
     return node;
@@ -281,13 +387,16 @@ class JSSynthPlayer {
   getVolume() { return this._volume; }
 
   /**
-   * Register a callback invoked once when the soft clipper starts engaging.
-   * @param {Function|null} fn callback or null to clear
+   * Register a callback invoked when clipping gets worse: first mild, then severe (see CLIP_LEVEL).
+   * @param {((level: number) => void)|null} fn callback, given the new CLIP_LEVEL, or null to clear
    */
   setOnClip(fn) { this._onClip = (typeof fn === 'function') ? fn : null; }
 
-  /** Re-arm clip detection so the onClip callback fires again on the next clipped block. */
-  resetClipDetection() { this._clipDetected = false; }
+  /** Forget the clipping seen so far, so the onClip callback fires again on the next clipped block. */
+  resetClipDetection() { this._clipLevel = CLIP_LEVEL.none; }
+
+  /** @returns {ArrayBuffer|null} bytes of the loaded soundfont, null before the first one is loaded */
+  getSoundfontBytes() { return this._sfontBytes; }
 
   /** Start playback (resumes AudioContext if needed). */
   play() { this._audioContext.resume(); this._synth.playPlayer(); this._playing = true; }
@@ -307,20 +416,9 @@ class JSSynthPlayer {
       console.error('[ERROR] Invalid tempo multiplier:', multiplier);
       return undefined;
     }
-    // FluidSynth internal tempo multiplier range clamping (see FLUID_PLAYER_TEMPO_INTERNAL definition in FluidSynth source)
-    // i.e. https://github.com/FluidSynth/fluidsynth/blob/master/src/midi/fluid_midi.c
-    const FLUID_MIN = 0.001;
-    const FLUID_MAX = 1000;
-    const clamped = Math.min(FLUID_MAX, Math.max(FLUID_MIN, m));
-    if (clamped !== m) {
-      console.warn('[WARN] Tempo multiplier clamped to FluidSynth limits:', m, '→', clamped);
-    }
-    // Support both legacy (PlayerSetTempoType) and current (Constants.PlayerSetTempoType) paths
-    const internalType = JSSynth.Constants?.PlayerSetTempoType?.Internal
-      ?? JSSynth.PlayerSetTempoType?.Internal
-      ?? 0;
+    const clamped = clampTempoMultiplier(m);
     try {
-      this._synth.setPlayerTempo(internalType, clamped);
+      this._synth.setPlayerTempo(INTERNAL_TEMPO_TYPE, clamped);
     } catch (error) {
       console.error('[ERROR] setPlayerTempo failed:', error);
       return undefined;

@@ -26,6 +26,8 @@
   "author": "Emmanuel Dervieux",
   "license": "Unlicense",
   "dependencies": {
+    "@libav.js/variant-obsolete": "^6.11.9",
+    "fflate": "^0.8.3",
     "js-synthesizer": "^1.11.0"
   },
   "devDependencies": {

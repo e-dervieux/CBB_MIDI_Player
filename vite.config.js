@@ -8,7 +8,10 @@ import {
   SOUNDFONTS_DIR, 
   SOUND_DATA_DIR, 
   EXTERNALS_DIR,
-  FLUIDSYNTH_PATTERN 
+  FLUIDSYNTH_PATTERN,
+  LIBAV_DIR,
+  LIBAV_BUILD_DIR,
+  LIBAV_FILES_PATTERN
 } from './build-constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -127,6 +130,15 @@ function copyBuildAssets() {
         }
       }
       
+      // Copy libav.js (audio export encoders, loaded on first export)
+      const libavDir = resolve(__dirname, LIBAV_DIR);
+      const destLibav = resolve(distDir, LIBAV_BUILD_DIR);
+      fs.mkdirSync(destLibav, { recursive: true });
+      fs.readdirSync(libavDir)
+        .filter(f => LIBAV_FILES_PATTERN.test(f))
+        .forEach(f => fs.copyFileSync(join(libavDir, f), join(destLibav, f)));
+      console.log(`[Build] Copied libav.js → dist/${LIBAV_BUILD_DIR}/`);
+
       // Copy sound_data folder
       const soundDataDir = resolve(__dirname, SOUND_DATA_DIR);
       if (fs.existsSync(soundDataDir)) {

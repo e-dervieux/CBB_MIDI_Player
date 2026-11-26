@@ -5,9 +5,10 @@
 */
 
 import { DEFAULT_BPM, DEFAULT_BUNDLED_SF2_NAME } from './playback-defaults.js';
-import { JSSynthPlayer } from './synthesizer-player.js';
+import { JSSynthPlayer, CLIP_LEVEL } from './synthesizer-player.js';
 import { checkMidiFile } from './midi-file-check.js';
 import { TempoMap, readTempoMap } from './midi-file.js';
+import { initExportPanel } from './export-panel.js';
 
 // ---------------------------------------------------------------------------
 // Constants / Config
@@ -54,6 +55,7 @@ const playlist = [];     // { name, ext, file, arrayBuffer? }
 let currentIndex = -1;   // active playlist index
 let isPlaying = false;   // transport state (true while playing)
 let autoplay = true;     // autoplay toggle state
+let playbackLocked = false; // true while an audio export runs (Play does nothing)
 
 /** Canonical tempo state updated when a file sets T_ref; controls (checkbox, inputs, slider) stay in the DOM. */
 const tempoStore = {
@@ -400,10 +402,18 @@ function setVolumeSliderGain(gain) {
   volumeEl.value = String(volumeGainToPosition(gain) * VOLUME_SLIDER_MAX);
 }
 
-/** Latched clip indicator: set by the player's onClip callback, cleared when the volume is lowered. */
-function setClipIndicator(clipping) {
-  clipIndicatorEl.textContent = clipping ? 'CLIPPING!' : 'No clipping yet';
-  clipIndicatorEl.classList.toggle('clip-indicator--active', clipping);
+/**
+ * Latched clip indicator: raised by the player's onClip callback, cleared when the volume is lowered.
+ * @param {number} level CLIP_LEVEL
+ */
+function setClipIndicator(level) {
+  clipIndicatorEl.textContent = {
+    [CLIP_LEVEL.none]: 'No clipping yet',
+    [CLIP_LEVEL.mild]: 'Mild clipping.',
+    [CLIP_LEVEL.severe]: 'CLIPPING!',
+  }[level];
+  clipIndicatorEl.classList.toggle('clip-indicator--mild', level === CLIP_LEVEL.mild);
+  clipIndicatorEl.classList.toggle('clip-indicator--severe', level === CLIP_LEVEL.severe);
 }
 
 function updateVolumeReadout() {
@@ -421,8 +431,7 @@ function applyVolumeSliderDomFromConstants() {
 }
 
 /** Active base BPM: file reference when MIDI-defined, else user field (HTML min/max enforces range). */
-function getActiveBaseBpm() {
-  const Tref = getTrackRefBpmSafe();
+function getActiveBaseBpm(Tref = getTrackRefBpmSafe()) {
   if (isMidiTempoDefinedChecked()) return Tref;
   const raw = Number(tempoBaseInput.value);
   if (!Number.isFinite(raw) || raw <= 0) {
@@ -434,11 +443,12 @@ function getActiveBaseBpm() {
 
 /**
  * Internal multiplier: factor × (T_active / T_ref). Matches uniform scaling of all MIDI tempo events.
+ * @param {number} [Tref] starting BPM of the file (default: the loaded track's)
  */
-function computeInternalTempoMultiplier() {
+function computeInternalTempoMultiplier(Tref = getTrackRefBpmSafe()) {
   const factor = getTempoFactorFromSlider();
-  const Tactive = getActiveBaseBpm();
-  return factor * (Tactive / getTrackRefBpmSafe());
+  const Tactive = getActiveBaseBpm(Tref);
+  return factor * (Tactive / Tref);
 }
 
 function formatBpmForDisplay(bpm) {
@@ -533,7 +543,7 @@ async function ensurePlayer() {
     }
     debug('JSSynthPlayer ready');
     player.setVolume(getVolumeGainFromSlider());
-    player.setOnClip(() => setClipIndicator(true));
+    player.setOnClip(setClipIndicator);
     // UI loop will start on first play to reduce idle CPU
     // Subscribe to audio heartbeat so onEnded triggers in background tabs
     if (typeof player.setOnAudioTick === 'function') {
@@ -694,7 +704,7 @@ function onEnded() {
 /** Start playback from currentTick, enabling audio and UI loops. */
 async function playTrack() {
   await ensurePlayer();
-  if (!player || currentIndex < 0) return;
+  if (!player || currentIndex < 0 || playbackLocked) return;
   debugTickState('playTrack start');
   debug('Play requested at index', currentIndex, 'title:', trackTitleEl.textContent);
   // Sync synth to our internal position first
@@ -1130,7 +1140,7 @@ volumeEl.addEventListener('input', async () => {
     // Lowering the volume clears the clip indicator until clipping happens again
     if (gain < player.getVolume()) {
       player.resetClipDetection();
-      setClipIndicator(false);
+      setClipIndicator(CLIP_LEVEL.none);
     }
     player.setVolume(gain);
   } catch (error) {
@@ -1294,6 +1304,33 @@ sf2Input.addEventListener('change', async () => {
   if (!isPlaying) {
     safePlayerCall(player.setAudioState, AUDIO_STATE.stopped);
   }
+});
+
+// Audio export: export-panel.js has no access to the app's state, so it receives this small interface.
+// Through it, the panel reads what an export needs (tracks, loaded soundfont, volume, speed) and pauses
+// playback, which stays locked until the export ends.
+initExportPanel({
+  /** @param {'track'|'playlist'} scope @returns {Promise<{ name: string, arrayBuffer: ArrayBuffer }[]>} */
+  async getTracks(scope) {
+    const items = scope === 'playlist' ? playlist : (currentIndex >= 0 ? [playlist[currentIndex]] : []);
+    return Promise.all(items.map(async (item) => {
+      item.arrayBuffer ??= await item.file.arrayBuffer();
+      return { name: item.name, arrayBuffer: item.arrayBuffer };
+    }));
+  },
+  async getSoundfontBytes() {
+    await ensurePlayer();
+    return player.getSoundfontBytes();
+  },
+  getVolume: getVolumeGainFromSlider,
+  tempoMultiplierFor: computeInternalTempoMultiplier,
+  async pausePlayback() {
+    if (isPlaying) await pauseTrack();
+  },
+  setPlaybackLocked(locked) {
+    playbackLocked = locked;
+    playPauseBtn.disabled = locked;
+  },
 });
 
 // SoundFonts dropdown: initial fill, selection applies new SF2

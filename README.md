@@ -25,6 +25,7 @@ This player comes with the [Microsoft GS Wavetable Synth](https://web.archive.or
 - Timeline/seek, Play/Pause/Stop/Rewind
 - **Volume**: ×1 (slider midpoint) is FluidSynth's default gain (0.2), which leaves headroom for dense files; the slider goes from ×0 to ×10, and the orange/red zone warns that loud files may saturate. A soft limiter (linear up to 0.8, tanh shoulder towards 1) keeps the output from hard clipping.
 - **Tempo**: a **speed** factor (×0.5–×2), and optionally a custom **base BPM** instead of the file's starting tempo (120 BPM if the file sets none). All tempo changes in the file are scaled together. **Effective BPM** shows the resulting starting tempo. The timeline follows the file's tempo changes and shows times at the current speed.
+- **Audio export** (folded section under the playlist): export the current track, or the whole playlist as a `.zip`, to WAV (16/24-bit or 32-bit float), FLAC, MP3 (CBR or VBR), Ogg Opus or Ogg Vorbis, in mono or stereo, at 22.05–96 kHz. Options: apply the current volume and speed, trim long silent endings, and normalize the peak level (per track or across the playlist). Rendering is faster than real time and sounds like playback (same soft limiter, used only when a track would otherwise exceed −0.5 dB, with a recommended volume to avoid it). Encoding uses [libav.js](https://github.com/Yahweasel/libav.js) (FFmpeg compiled to WebAssembly, ~1 MB, downloaded on first export only).
 - Autoplay (plays the next track when the current one ends) and **Loop** with a mode: **Track** (repeat the current item) or **Playlist** (advance and wrap at the end of the list). The Track/Playlist choices are disabled until you turn Loop on.
 - “Audio Test” (should play a 1 s test tone) and “MIDI Test” (should play a short MIDI test using a piano sound) buttons
 - Background-tab safe (will continue playing when the tab is in the background)
@@ -74,19 +75,19 @@ python3 -m http.server 8000 --directory dist
    - On **GitHub Pages**: The dropdown shows pre-bundled SF2 files from the `sound_data/Soundfonts/` folder
    - **Locally**: The refresh button (⟳) scans for new SF2 files you add to `sound_data/Soundfonts/`
    - You can also load any SF2 file from disk *via* the "Load custom SF2" file input, which will be added to the dropdown, and become available to the player
-3. **Add MIDI files** to select one or more `.mid`/`.midi` files from your computer.
-4. Select a track in the playlist and press **Play**. Available controls:
+3. **MIDI Test** plays a short C–E–G arpeggio to verify MIDI playback.
+4. **Add MIDI files** to select one or more `.mid`/`.midi` files from your computer.
+5. Select a track in the playlist and press **Play**. Available controls:
    - Timeline seek and volume slider
    - **Autoplay**: plays next track when current one ends
    - **Tempo** (under the timeline): speed factor, file or custom base BPM
    - **Loop** + **Track** or **Playlist**: when Loop is on, choose whether the same track repeats or the playlist wraps to the next item after each end
-5. **Keyboard shortcuts** (ignored while focus is in a text field, dropdown, or rich-text box):
+6. **Keyboard shortcuts** (ignored while focus is in a text field, dropdown, or rich-text box):
    - `Space` — play/pause
    - `S` — stop
    - `ArrowRight` / `ArrowLeft` — seek forward / back by **5 seconds**
    - `ArrowDown` — rewind to beginning
-6. **MIDI Test** plays a short C–E–G arpeggio to verify MIDI playback.
-7. **Refresh SF2** button (⟳) rescans the `sound_data/Soundfonts/` folder (works only when served locally with directory listing enabled).
+7. **Export audio**: open the section under the playlist, choose the options, then **Export current track** or **Export playlist as .zip**. Playback pauses during the export; hover the **?** marks for explanations.
 
 ## Known issues
 

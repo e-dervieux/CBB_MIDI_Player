@@ -10,6 +10,7 @@
   --border: #2a2a32;
   --warn: #f5a524;
   --danger: #e5484d;
+  --success: #46a758;
   --dimmed-opacity: 0.45;
   /* Font sizes (normal text uses the browser default, 1rem) */
   --font-small: 0.9rem;
@@ -62,7 +63,7 @@ html, body {
   flex: 1 1 var(--playlist-min-width);
 }
 
-.selectors, .player, .playlist, .synth {
+.selectors, .player, .playlist, .export, .synth {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-large);
@@ -100,9 +101,10 @@ html, body {
   background: transparent;
 }
 
-/* Small secondary buttons (volume and tempo reset) */
+/* Small secondary buttons (volume and tempo reset, export Cancel) */
 .volume-reset-btn,
-.tempo-reset-btn {
+.tempo-reset-btn,
+.export-cancel-btn {
   padding: var(--space-xs) var(--space-sm);
   font-size: var(--font-small);
 }
@@ -271,13 +273,19 @@ html, body {
   opacity: var(--dimmed-opacity);
 }
 
-.clip-indicator.clip-indicator--active {
+.clip-indicator.clip-indicator--mild {
+  opacity: 1;
+  color: var(--warn);
+}
+
+.clip-indicator.clip-indicator--severe {
   opacity: 1;
   color: var(--danger);
   font-weight: 700;
 }
 
-.volume-help {
+/* "?" badge explaining a control on hover (native title tooltip) */
+.help {
   color: var(--accent);
   font-weight: 700;
   cursor: help;
@@ -423,4 +431,70 @@ input[type="range"] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Export: full-width section under the player and playlist, folded by default */
+.export {
+  flex-basis: 100%;
+}
+
+.export summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.export-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  margin-top: var(--space-md);
+}
+
+/* Fieldset only groups the options so they can all be disabled at once during an export */
+.export-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.export-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm) var(--space-lg);
+}
+
+.export-row[hidden] {
+  display: none;
+}
+
+.export label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.export label:has(:disabled) {
+  opacity: var(--dimmed-opacity);
+}
+
+.export-separator {
+  width: var(--space-lg);
+}
+
+.export-log {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.export-ok {
+  color: var(--success);
+}
+
+.export-error {
+  color: var(--danger);
 }

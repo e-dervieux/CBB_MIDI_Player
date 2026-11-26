@@ -29,7 +29,7 @@
           <button id="refreshSf2Btn" class="btn" title="Rescan Soundfonts">⟳</button>
         </div>
         <div class="selector">
-          <button id="testBeepBtn" class="btn" title="Play a 1s test tone">Audio Test</button>
+          <button id="testBeepBtn" class="btn" title="Play a 1 s test tone">Audio Test</button>
           <button id="testChordBtn" class="btn" title="Play a short MIDI test on piano">MIDI Test</button>
           <button id="playDemoBtn" class="btn" title="Load and play the demo MIDI file">Play Demo File</button>
         </div>
@@ -75,7 +75,7 @@
             <div class="volume-actions">
               <button type="button" id="volumeResetBtn" class="btn volume-reset-btn">Reset vol.</button>
               <span id="clipIndicator" class="clip-indicator">No clipping yet</span>
-              <span class="volume-help" title="×1 = FluidSynth's default gain (0.2), deliberately low to keep headroom when many notes play at once, so some files sound quiet.&#10;Orange/red: loud or dense files may saturate. A soft limiter prevents hard clipping but adds distortion.">?</span>
+              <span class="help" title="×1 = FluidSynth's default gain (0.2), deliberately low to keep headroom when many notes play at once, so some files sound quiet.&#10;Orange/red: loud or dense files may saturate. A soft limiter prevents hard clipping but adds distortion: &quot;Mild clipping.&quot; when it starts rounding off peaks (barely audible), &quot;CLIPPING!&quot; when peaks go above −0.5 dB (audible distortion likely).">?</span>
             </div>
           </div>
         </div>
@@ -117,6 +117,51 @@
         <h2>Playlist</h2>
         <ul id="playlist"></ul>
       </section>
+
+      <section class="export">
+        <details>
+          <summary>Export audio</summary>
+          <div class="export-body">
+            <div class="export-row">
+              <button type="button" id="exportTrackBtn" class="btn">Export current track</button>
+              <button type="button" id="exportPlaylistBtn" class="btn">Export playlist as .zip</button>
+            </div>
+            <fieldset id="exportOptions" class="export-options">
+              <div class="export-row">
+                <label><input type="checkbox" id="exportApplyVolume" checked /> Apply current volume</label>
+                <label><input type="checkbox" id="exportApplySpeed" checked /> Apply speed change</label>
+                <label><input type="checkbox" id="exportTrimSilence" checked /> Trim silence at the end
+                  <span class="help" title="Ends each file once its last note has died out (-60 dB relative to the tracks' loudest peak + 500 ms fade-out), instead of at the end of the MIDI file.&#10;Some files run on long after their last note (e.g. excerpts of a longer piece): without this, the audio would end with a long silence.">?</span></label>
+              </div>
+              <div class="export-row">
+                <label><input type="checkbox" id="exportNormalize" /> Normalize volume
+                  <span class="help" title="Sets the loudest peak to −0.5 dB, replacing the volume setting.&#10;The 0.5 dB margin absorbs the small peak overshoot that lossy encoding (MP3, Opus, Vorbis) adds, which would otherwise clip when the file is played.&#10;Per track: each file as loud as possible. On whole playlist: one gain for all files, keeping their relative loudness.">?</span></label>
+                <label><input type="radio" name="exportNormalizeScope" value="track" checked /> per track</label>
+                <label><input type="radio" name="exportNormalizeScope" value="playlist" /> on whole playlist</label>
+              </div>
+              <div class="export-row">
+                <label>Format <select id="exportFormat"></select></label>
+                <label>Bitrate <select id="exportQuality"></select></label>
+                <label>Sample rate <select id="exportSampleRate"></select></label>
+              </div>
+              <div class="export-row">
+                <label><input type="radio" name="exportChannels" value="1" /> Mono</label>
+                <label><input type="radio" name="exportChannels" value="2" checked /> Stereo</label>
+                <span class="export-separator"></span>
+                <label><input type="radio" name="exportBitDepth" value="16" checked /> 16-bit</label>
+                <label><input type="radio" name="exportBitDepth" value="24" /> 24-bit</label>
+                <label><input type="radio" name="exportBitDepth" value="32" /> 32-bit float</label>
+              </div>
+            </fieldset>
+            <div id="exportProgress" class="export-row" hidden>
+              <progress id="exportProgressBar" max="1" value="0"></progress>
+              <span id="exportProgressText"></span>
+              <button type="button" id="exportCancelBtn" class="btn export-cancel-btn">Cancel</button>
+            </div>
+            <div id="exportLog" class="export-log" aria-live="polite"></div>
+          </div>
+        </details>
+      </section>
     </main>
 
     <!-- Load app as module - Vite will bundle everything -->
@@ -129,5 +174,3 @@
     </footer>
   </body>
 </html>
-
-
