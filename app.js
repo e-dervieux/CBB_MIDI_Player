@@ -556,8 +556,6 @@ async function ensurePlayer() {
   return player;
 }
 
-async function waitForSynthReady(maxMs = 8000) { await ensurePlayer(); return true; }
-
 // ---------------------------------------------------------------------------
 // End-of-track detection
 // ---------------------------------------------------------------------------
@@ -1047,7 +1045,7 @@ function loadTrack(index) {
     try {
       debug('Loading track into player:', item.name, '(' + item.ext + ')');
       if (typeof player.pause === 'function') player.pause();
-      await waitForSynthReady(5000);
+      await ensurePlayer();
 
       timing.reset();
       const tempoMap = readTempoMap(arrayBuffer);

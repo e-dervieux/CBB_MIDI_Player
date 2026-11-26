@@ -2,7 +2,6 @@
   "name": "cbb-midi-player",
   "version": "1.0.0",
   "description": "A web-based MIDI player using FluidSynth and js-synthesizer with SoundFont support",
-  "main": "src/app.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -28,12 +27,12 @@
   "dependencies": {
     "@libav.js/variant-obsolete": "^6.11.9",
     "fflate": "^0.8.3",
-    "js-synthesizer": "^1.11.0"
+    "js-synthesizer": "^1.13.0"
   },
   "devDependencies": {
-    "vite": "^7.1.8"
+    "vite": "^7.3.8"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": "^20.19.0 || >=22.12.0"
   }
 }

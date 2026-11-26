@@ -6,7 +6,6 @@
    - Internal: isolated test synth for MIDI Test (so it never affects the main song)
    - Shared with the audio export: softClip, PEAK_CEILING, clampTempoMultiplier, SharedSoundfont
 */
-import { DEFAULT_BPM, DEFAULT_TEMPO_US_PER_QUARTER } from './playback-defaults.js';
 import * as JSSynth from 'js-synthesizer';
 
 // ---------------------------------------------------------------------------
@@ -251,11 +250,6 @@ class JSSynthPlayer {
     this._testSynth = null;
     this._testNode = null;
 
-    // Transport mirrors (not strictly required; kept for compatibility / future use)
-    this._currentTime = 0;
-    this._duration = 0;
-    this._playing = false;
-
     // Readiness --------------------------------------------------------------
     this._ready = false;
     this._init();
@@ -369,7 +363,6 @@ class JSSynthPlayer {
       await this._safeSynthCall(this._synth, this._synth?.midiSystemReset);
       await this._safeSynthCall(this._synth, this._synth?.resetPlayer);
       await this._synth.addSMFDataToPlayer(SMFbytes);
-      this._currentTime = 0;
       console.log('[DEBUG] js-synthesizer: MIDI loaded');
     } catch (error) {
       console.error('[ERROR] Failed to load MIDI:', error);
@@ -399,10 +392,10 @@ class JSSynthPlayer {
   getSoundfontBytes() { return this._sfontBytes; }
 
   /** Start playback (resumes AudioContext if needed). */
-  play() { this._audioContext.resume(); this._synth.playPlayer(); this._playing = true; }
+  play() { this._audioContext.resume(); this._synth.playPlayer(); }
 
   /** Pause/stop FluidSynth player immediately (MIDI clock stops). */
-  pause() { this._synth.stopPlayer(); this._playing = false; }
+  pause() { this._synth.stopPlayer(); }
 
   /**
    * FluidSynth FLUID_PLAYER_TEMPO_INTERNAL: multiply all MIDI tempo events uniformly.
@@ -434,7 +427,6 @@ class JSSynthPlayer {
     if (!this._synth) return;
     const t = Math.max(0, Math.floor(Number(ticks) || 0));
     this._synth.seekPlayer(t);
-    if (t === 0) this._currentTime = 0;
   }
 
   /**
@@ -501,25 +493,6 @@ class JSSynthPlayer {
     return new Promise((resolve) => {
       setTimeout(() => resolve(), notes.length * noteDuration);
     });
-  }
-
-  // Optional helpers ---------------------------------------------------------
-  // (Convenience wrappers; app.js often reads player._synth directly for ticks/tempo.)
-  /** @returns {Promise<number>} total ticks, or 0 on failure */
-  async getTotalTicks() {
-    return (await this._safeSynthCall(this._synth, this._synth?.retrievePlayerTotalTicks)) || 0;
-  }
-  /** @returns {Promise<number>} current tick, or 0 on failure */
-  async getCurrentTick() {
-    return (await this._safeSynthCall(this._synth, this._synth?.retrievePlayerCurrentTick)) || 0;
-  }
-  /** @returns {Promise<number>} tempo in microseconds per quarter note */
-  async getMidiTempoUsPerQuarter() {
-    return (await this._safeSynthCall(this._synth, this._synth?.retrievePlayerMIDITempo)) || DEFAULT_TEMPO_US_PER_QUARTER;
-  }
-  /** @returns {Promise<number>} beats per minute */
-  async getBPM() {
-    return (await this._safeSynthCall(this._synth, this._synth?.retrievePlayerBpm)) || DEFAULT_BPM;
   }
 
   /** Register a callback invoked by the heartbeat worklet on audio ticks.
