@@ -22,6 +22,7 @@ export const CLIP_LEVEL = Object.freeze({ none: 0, mild: 1, severe: 2 });
 const WAIT_FOR_READY_TIMEOUT_MS = 50;     // Timeout for waiting for the synthesizer to be ready
 const AUDIO_BUFFER_SIZE = 2048;           // Buffer size for synth audio node
 const TEST_CHORD_NOTE_DURATION_MS = 160;  // Duration per note in test chord
+const TEST_CHORD_TAIL_MS = 2000;          // After the last note: release and reverb tail, then the test synth stops
 // FluidSynth's internal tempo multiplier range (FLUID_PLAYER_TEMPO_INTERNAL), see
 // https://github.com/FluidSynth/fluidsynth/blob/master/src/midi/fluid_midi.c
 const TEMPO_MULTIPLIER_MIN = 0.001;
@@ -249,6 +250,7 @@ class JSSynthPlayer {
     // Isolated test synth (for MIDI Test) -----------------------------------
     this._testSynth = null;
     this._testNode = null;
+    this._testNodeTimer = null;   // pending disconnection of the test node (see playTestChord)
 
     // Readiness --------------------------------------------------------------
     this._ready = false;
@@ -440,8 +442,7 @@ class JSSynthPlayer {
     this._testSynth.init(this._audioContext.sampleRate);
     // Match main synth gain so test chord level is comparable.
     this._testSynth.setGain(FLUIDSYNTH_GAIN);
-    this._testNode = this._createSynthNode(this._testSynth);
-    this._testNode.connect(this._audioContext.destination);
+    this._testNode = this._createSynthNode(this._testSynth); // connected only while a test chord plays
   }
 
   /**
@@ -456,6 +457,16 @@ class JSSynthPlayer {
     // C -> E -> G arpeggio with proper duration per note
     const notes = [60, 64, 67]; // C, E, G
     const noteDuration = TEST_CHORD_NOTE_DURATION_MS;
+
+    // The test synth only renders while connected: connect it now (no-op if still connected from a previous
+    // chord), and disconnect it once this chord has died out
+    clearTimeout(this._testNodeTimer);
+    this._testNode.connect(this._audioContext.destination);
+    // The notes are timed by the page's clock, not by the audio: wait until audio runs (the AudioContext stays
+    // suspended until the first user action), or the first note would lose the time audio takes to start
+    await this._audioContext.resume();
+    this._testNodeTimer = setTimeout(() => this._testNode.disconnect(),
+      notes.length * noteDuration + TEST_CHORD_TAIL_MS);
     try {
       this._testSynth.midiProgramChange(chan, 0);
 
