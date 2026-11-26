@@ -1015,7 +1015,7 @@ async function applySelectedSf2() {
     const wasPlaying = isPlaying;
     let resumeTick = timing.currentTick;
     if (wasPlaying) await pauseTrack();
-    if (typeof player.loadSF2 === 'function') await player.loadSF2(sf2FileData, true);
+    if (typeof player.loadSF2 === 'function') await player.loadSF2(sf2FileData);
     // Restore play state and position
     timing.currentTick = resumeTick;
     if (wasPlaying) await playTrack();
@@ -1316,9 +1316,8 @@ initExportPanel({
       return { name: item.name, arrayBuffer: item.arrayBuffer };
     }));
   },
-  async getSoundfontBytes() {
-    await ensurePlayer();
-    return player.getSoundfontBytes();
+  getSoundfont() {
+    return player?.getSoundfont() ?? null;
   },
   getVolume: getVolumeGainFromSlider,
   tempoMultiplierFor: computeInternalTempoMultiplier,

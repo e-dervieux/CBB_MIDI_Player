@@ -1,9 +1,9 @@
 /* js-synthesizer adapter for this app
    - Wraps FluidSynth (WASM) via js-synthesizer (static ES import; init waits for WASM in _init).
-   - Stable API used by app.js: loadSF2, loadMIDI, play, pause, seek, setPlayerTempoMultiplier,
+   - Stable API used by app.js: loadSF2, getSoundfont, loadMIDI, play, pause, seek, setPlayerTempoMultiplier,
      setVolume, getVolume, setOnClip, resetClipDetection, setOnAudioTick, playTestChord, setAudioState
    - Output: each synth node applies master volume then a soft clipper, so samples never exceed ±1
-   - Internal: isolated test synth for MIDI Test (so it never affects the main song)
+   - Internal: isolated test synth for MIDI Test (so it never affects the main song), sharing the soundfont
    - Shared with the audio export: softClip, PEAK_CEILING, clampTempoMultiplier, SharedSoundfont
 */
 import * as JSSynth from 'js-synthesizer';
@@ -59,26 +59,30 @@ export function clampTempoMultiplier(multiplier) {
 
 /** The FluidSynth WebAssembly module: global set by libfluidsynth-*.js (see main.js), as used by js-synthesizer. */
 const fluidsynth = () => globalThis.Module;
+const FLUID_BUFSIZE = 64; // FluidSynth renders in blocks of this many frames
 
 /**
- * A soundfont loaded once, lent to fresh synthesizers for offline rendering (audio export).
+ * A soundfont loaded once and shared by every synthesizer: the player's main and MIDI Test synths, and the synths
+ * the audio export renders with. js-synthesizer has no API for this, hence the direct FluidSynth calls on its
+ * `_synth` handles (fluid_synth_add_sfont, fluid_synth_remove_sfont).
  *
- * Why fresh synthesizers: FluidSynth has no complete reset. fluid_synth_system_reset leaves sound ringing for
- * about 0.7 s and keeps the reverb and chorus oscillators and filters running, so a reused synth renders a
- * track slightly differently from a new one (measured: −28 dB of the previous track at first, −52 dB later).
+ * Why share: the soundfont is held in memory once however many synths use it, and loaded once (seconds for large
+ * soundfonts). Renders were checked bit-identical to synths loading the soundfont themselves.
+ * Why the export renders on fresh synths (createSynth): FluidSynth has no complete reset. fluid_synth_system_reset
+ * leaves sound ringing for about 0.7 s and keeps the reverb and chorus oscillators and filters running, so a reused
+ * synth renders a track slightly differently from a new one.
  * Renders must be exact: the export renders each track twice and relies on both passes being identical.
- * Why lend the soundfont: loading it in every synth would cost a load per track and per pass, which takes
- * seconds for large soundfonts. FluidSynth can attach an already-loaded soundfont to another synth
- * (fluid_synth_add_sfont); renders were checked bit-identical to synths loading it themselves.
- * js-synthesizer has no API for this, hence the direct FluidSynth calls on its `_synth` handles.
- * Lifetime: the owner synth keeps the soundfont until close(); borrowers detach it before closing
- * (fluid_synth_remove_sfont), since a synth frees the soundfonts it holds when deleted.
+ * Soundfont ids are not used: FluidSynth stores the id in the soundfont itself and changes it each time the
+ * soundfont is added to a synth.
+ * Lifetime: a hidden owner synth holds the soundfont. load() counts as a first hold, retain() adds one,
+ * release() drops one and the last release frees the soundfont. By then every synth must have been detached
+ * (detach, releaseSynth), since a synth frees the soundfonts it holds when deleted.
  */
 export class SharedSoundfont {
   /**
    * @param {ArrayBuffer} sf2Bytes soundfont
-   * @param {number} sampleRate any (the owner never renders), e.g. the export's
-   * @returns {Promise<SharedSoundfont>}
+   * @param {number} sampleRate any (the owner never renders), e.g. the player's
+   * @returns {Promise<SharedSoundfont>} held once: call release() when done
    */
   static async load(sf2Bytes, sampleRate) {
     const owner = new JSSynth.Synthesizer();
@@ -95,6 +99,32 @@ export class SharedSoundfont {
   constructor(owner, sfont) {
     this._owner = owner;
     this._sfont = sfont; // fluid_sfont_t pointer
+    this._holds = 1;
+  }
+
+  /** Keep the soundfont until a matching release(), e.g. for the duration of an export. */
+  retain() { this._holds++; }
+
+  /** Drop a hold; the last one frees the soundfont. */
+  release() {
+    this._holds--;
+    if (this._holds === 0) this._owner.close();
+  }
+
+  /** Make this the synth's soundfont (each channel then selects its program from it). */
+  attach(synth) {
+    fluidsynth()._fluid_synth_add_sfont(synth._synth, this._sfont);
+  }
+
+  /**
+   * Remove this soundfont from a synth, stopping the synth's sounds first: a voice still playing keeps using the
+   * soundfont's samples, which then could not be freed (i.e. without this, each replaced soundfont stayed in memory).
+   * Voices only end during rendering, hence the rendered block (silent, discarded).
+   */
+  detach(synth) {
+    synth.midiAllSoundsOff();
+    synth.render([new Float32Array(FLUID_BUFSIZE), new Float32Array(FLUID_BUFSIZE)]);
+    fluidsynth()._fluid_synth_remove_sfont(synth._synth, this._sfont);
   }
 
   /**
@@ -108,7 +138,7 @@ export class SharedSoundfont {
   async createSynth(sampleRate, smfBytes, tempoMultiplier) {
     const synth = new JSSynth.Synthesizer();
     synth.init(sampleRate);
-    fluidsynth()._fluid_synth_add_sfont(synth._synth, this._sfont);
+    this.attach(synth);
     try {
       synth.setGain(FLUIDSYNTH_GAIN);
       await synth.addSMFDataToPlayer(smfBytes);
@@ -123,13 +153,8 @@ export class SharedSoundfont {
 
   /** Detach the soundfont from a synth made by createSynth, then close the synth. */
   releaseSynth(synth) {
-    fluidsynth()._fluid_synth_remove_sfont(synth._synth, this._sfont);
+    this.detach(synth);
     synth.close();
-  }
-
-  /** Free the soundfont (after every borrower has been released). */
-  close() {
-    this._owner.close();
   }
 }
 
@@ -202,30 +227,6 @@ class JSSynthPlayer {
     }
   }
 
-  /** Load soundfont into both main and test synths (same bytes, two instances). */
-  async _loadSF2IntoBothSynths(sf2FileData, unloadPrevious = false) {
-    try {
-      // Main synth: unload previous font when replacing.
-      if (unloadPrevious && this._sfontId != null) {
-        await this._safeSynthCall(this._synth, this._synth?.unloadSFont, this._sfontId);
-      }
-      // js-synthesizer's loadSFont() can handle ArrayBuffer directly
-      // See: https://github.com/jet2jet/js-synthesizer
-      this._sfontId = await this._synth.loadSFont(sf2FileData);
-
-      // Test synth: same soundfont, different instance (see _ensureTestSynth).
-      await this._ensureTestSynth();
-      if (unloadPrevious && this._sfontId != null) {
-        await this._safeSynthCall(this._testSynth, this._testSynth?.unloadSFont, this._sfontId);
-      }
-      // Test synth gets the same soundfont ID as main synth
-      await this._testSynth.loadSFont(sf2FileData);
-    } catch (error) {
-      console.error('[ERROR] Failed to load SF2 into both synths:', error);
-      throw error; // Re-throw to propagate the error
-    }
-  }
-
   constructor() {
     // WebAudio pipeline ------------------------------------------------------
     // Synth nodes (volume + soft clip applied per sample, see _createSynthNode) → destination
@@ -236,8 +237,7 @@ class JSSynthPlayer {
 
     // Synth state ------------------------------------------------------------
     this._synth = null;           // main synthesizer (FluidSynth)
-    this._sfontId = null;         // current SFont id
-    this._sfontBytes = null;      // raw SF2 bytes for reuse (test synth)
+    this._soundfont = null;       // SharedSoundfont of the main and test synths (see loadSF2)
     this._node = null;            // main audio node
     this._tickNode = null;        // background heartbeat node
     this._tickGain = null;        // silent gain for heartbeat
@@ -328,22 +328,22 @@ class JSSynthPlayer {
   }
 
   /**
-   * Load an SF2 soundfont into both main and test synthesizers.
-   * @param {ArrayBuffer|Uint8Array} sf2FileData SF2 file data from user input
-   * @param {boolean} unloadPrevious whether to unload existing soundfont first
+   * Load an SF2 soundfont, replacing the current one, for both the main and test synthesizers (one shared
+   * soundfont, see SharedSoundfont). The current one is released first, so the player never holds two at once.
+   * @param {ArrayBuffer|Uint8Array} sf2FileData SF2 file data
    */
-  async loadSF2(sf2FileData, unloadPrevious = false) {
-    try {
-      await this._waitForReady();
-
-      // Cache the data for potential reuse (e.g., when switching soundfonts)
-      this._sfontBytes = sf2FileData.slice();
-      await this._loadSF2IntoBothSynths(sf2FileData, unloadPrevious);
-      console.log('[DEBUG] js-synthesizer: SF2 loaded');
-    } catch (error) {
-      console.error('[ERROR] Failed to load SF2:', error);
-      throw error; // Re-throw to propagate the error
+  async loadSF2(sf2FileData) {
+    await this._waitForReady();
+    this._ensureTestSynth();
+    const synths = [this._synth, this._testSynth];
+    if (this._soundfont) {
+      for (const synth of synths) this._soundfont.detach(synth);
+      this._soundfont.release();
+      this._soundfont = null;
     }
+    this._soundfont = await SharedSoundfont.load(sf2FileData, this._audioContext.sampleRate);
+    for (const synth of synths) this._soundfont.attach(synth);
+    console.log('[DEBUG] js-synthesizer: SF2 loaded');
   }
 
   /**
@@ -388,8 +388,8 @@ class JSSynthPlayer {
   /** Forget the clipping seen so far, so the onClip callback fires again on the next clipped block. */
   resetClipDetection() { this._clipLevel = CLIP_LEVEL.none; }
 
-  /** @returns {ArrayBuffer|null} bytes of the loaded soundfont, null before the first one is loaded */
-  getSoundfontBytes() { return this._sfontBytes; }
+  /** @returns {SharedSoundfont|null} the loaded soundfont, null before the first one is loaded */
+  getSoundfont() { return this._soundfont; }
 
   /** Start playback (resumes AudioContext if needed). */
   play() { this._audioContext.resume(); this._synth.playPlayer(); }
@@ -430,29 +430,18 @@ class JSSynthPlayer {
   }
 
   /**
-   * Ensure an isolated synthesizer exists for the MIDI Test feature.
-   * Uses the same SF2 bytes as the main synth but a distinct synth instance,
-   * so program changes and notes never affect the main song state.
+   * Ensure an isolated synthesizer exists for the MIDI Test feature: it shares the main synth's soundfont
+   * (see loadSF2) but is a distinct synth instance, so program changes and notes never affect the main song state.
    * @private
    */
-  async _ensureTestSynth() {
-    try {
-      if (this._testSynth) return;
-      if (!this._sfontBytes) throw new Error('Load an SF2 first');
-      await JSSynth.waitForReady();
-      this._testSynth = new JSSynth.Synthesizer();
-      this._testSynth.init(this._audioContext.sampleRate);
-      // Match main synth gain so test chord level is comparable.
-      if (typeof this._testSynth.setGain === 'function') {
-        this._testSynth.setGain(FLUIDSYNTH_GAIN);
-      }
-      this._testNode = this._createSynthNode(this._testSynth);
-      this._testNode.connect(this._audioContext.destination);
-      await this._testSynth.loadSFont(this._sfontBytes);
-    } catch (error) {
-      console.error('[ERROR] Failed to ensure test synth:', error);
-      throw error; // Re-throw to propagate the error
-    }
+  _ensureTestSynth() {
+    if (this._testSynth) return;
+    this._testSynth = new JSSynth.Synthesizer();
+    this._testSynth.init(this._audioContext.sampleRate);
+    // Match main synth gain so test chord level is comparable.
+    this._testSynth.setGain(FLUIDSYNTH_GAIN);
+    this._testNode = this._createSynthNode(this._testSynth);
+    this._testNode.connect(this._audioContext.destination);
   }
 
   /**
@@ -461,15 +450,14 @@ class JSSynthPlayer {
    */
   async playTestChord() {
     if (!this._ready || !this._synth) return Promise.resolve();
-    await this._ensureTestSynth();
+    this._ensureTestSynth();
     const chan = 0; // Dedicated channel on the test instance only.
 
     // C -> E -> G arpeggio with proper duration per note
     const notes = [60, 64, 67]; // C, E, G
     const noteDuration = TEST_CHORD_NOTE_DURATION_MS;
     try {
-      if (this._sfontId != null) this._testSynth.midiProgramSelect(chan, this._sfontId, 0, 0);
-      else this._testSynth.midiProgramChange(chan, 0);
+      this._testSynth.midiProgramChange(chan, 0);
 
       // Play first note immediately
       this._testSynth.midiNoteOn(chan, notes[0], 100);

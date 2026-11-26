@@ -80,7 +80,7 @@ function updateVolumeOptions() {
   for (const radio of normalizeScopeRadios) radio.disabled = !normalizeToggle.checked;
 }
 
-/** @returns {import('./audio-export.js').ExportSettings} without sf2Bytes */
+/** @returns {import('./audio-export.js').ExportSettings} without the soundfont */
 function readSettings(app) {
   const normalize = normalizeToggle.checked ? checkedValue('exportNormalizeScope') : null;
   return {
@@ -171,12 +171,12 @@ async function runExport(app, scope) {
     logLine(scope === 'track' ? 'No track selected.' : 'The playlist is empty.');
     return;
   }
-  const sf2Bytes = await app.getSoundfontBytes();
-  if (!sf2Bytes) {
+  const soundfont = app.getSoundfont();
+  if (!soundfont) {
     logLine('No soundfont loaded yet.');
     return;
   }
-  const settings = { ...readSettings(app), sf2Bytes };
+  const settings = { ...readSettings(app), soundfont };
   const estimatedBytes = estimateExportBytes(tracks, settings);
   if (estimatedBytes > SIZE_WARNING_BYTES && !window.confirm(`This export should weigh about `
     + `${Math.round(estimatedBytes / 1e6)} MB and is built in memory, which may slow down or crash the browser tab. `
@@ -184,11 +184,13 @@ async function runExport(app, scope) {
     return;
   }
 
+  // Kept until the export ends, even if another soundfont is selected meanwhile
+  soundfont.retain();
   exportController = new AbortController();
-  await app.pausePlayback();
-  app.setPlaybackLocked(true);
-  setBusy(true);
   try {
+    await app.pausePlayback();
+    app.setPlaybackLocked(true);
+    setBusy(true);
     const result = await exportTracks(tracks, settings, { onProgress: showProgress, signal: exportController.signal });
     if (scope === 'track' && result.files.length > 0) {
       download(result.files[0].bytes, result.files[0].name);
@@ -204,6 +206,7 @@ async function runExport(app, scope) {
     exportController = null;
     setBusy(false);
     app.setPlaybackLocked(false);
+    soundfont.release();
   }
 }
 
@@ -214,7 +217,7 @@ async function runExport(app, scope) {
  * Fill the export options and wire the buttons.
  * @param {object} app
  * @param {(scope: 'track'|'playlist') => Promise<{ name: string, arrayBuffer: ArrayBuffer }[]>} app.getTracks
- * @param {() => Promise<ArrayBuffer|null>} app.getSoundfontBytes
+ * @param {() => import('./synthesizer-player.js').SharedSoundfont|null} app.getSoundfont
  * @param {() => number} app.getVolume volume slider gain
  * @param {(initialBpm: number) => number} app.tempoMultiplierFor playback speed multiplier for a file
  * @param {() => Promise<void>} app.pausePlayback
@@ -228,7 +231,7 @@ export function initExportPanel(app) {
   formatSelect.addEventListener('change', updateFormatOptions);
   normalizeToggle.addEventListener('change', updateVolumeOptions);
   cancelBtn.addEventListener('click', () => exportController?.abort());
-  // Errors before the export starts (reading files, loading the soundfont) end up in the log too
+  // Errors before the export starts (e.g. reading files) end up in the log too
   exportTrackBtn.addEventListener('click', () => runExport(app, 'track').catch(logError));
   exportPlaylistBtn.addEventListener('click', () => runExport(app, 'playlist').catch(logError));
 }

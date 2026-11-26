@@ -6,7 +6,7 @@
    track's peak and where its ending dies out, the second applies the gain and encodes.
 */
 import { parseSmf, TempoMap, usesSmpteTiming } from './midi-file.js';
-import { softClip, PEAK_CEILING, clampTempoMultiplier, SharedSoundfont } from './synthesizer-player.js';
+import { softClip, PEAK_CEILING, clampTempoMultiplier } from './synthesizer-player.js';
 import { AudioFileEncoder, EXPORT_FORMATS } from './audio-encoder.js';
 
 // ---------------------------------------------------------------------------
@@ -162,7 +162,7 @@ async function encodeTrack(track, analysis, gain, useLimiter, settings, encoder,
  * @property {null|'track'|'playlist'} normalize peak normalization (replaces volume)
  * @property {boolean} trimSilence end after the last note instead of at the end of the file
  * @property {(initialBpm: number) => number} tempoMultiplierFor speed multiplier for a file starting at this tempo
- * @property {ArrayBuffer} sf2Bytes soundfont
+ * @property {import('./synthesizer-player.js').SharedSoundfont} soundfont held by the caller until the export ends
  */
 
 /**
@@ -201,71 +201,64 @@ export async function exportTracks(tracks, settings, { onProgress, signal }) {
   const skipped = prepared.filter((track) => track.skipReason)
     .map(({ name, skipReason }) => ({ name, reason: skipReason }));
 
-  // One soundfont load for the whole export, lent to a fresh synth for each render (see SharedSoundfont)
-  const soundfont = await SharedSoundfont.load(settings.sf2Bytes, settings.sampleRate);
-  settings = { ...settings, soundfont };
-  try {
-    // Progress: 2 steps per track (analysis, encoding), each advancing with its rendered frames
-    const stepCount = 2 * playable.length;
-    let step = 0;
-    const trackProgress = (phase, index, expectedFrames) => {
-      let frames = 0;
-      return (newFrames) => {
-        frames += newFrames;
-        const fraction = (step + Math.min(1, frames / expectedFrames)) / stepCount;
-        onProgress({ phase, trackNumber: index + 1, trackCount: playable.length, fraction });
-      };
+  // Progress: 2 steps per track (analysis, encoding), each advancing with its rendered frames
+  const stepCount = 2 * playable.length;
+  let step = 0;
+  const trackProgress = (phase, index, expectedFrames) => {
+    let frames = 0;
+    return (newFrames) => {
+      frames += newFrames;
+      const fraction = (step + Math.min(1, frames / expectedFrames)) / stepCount;
+      onProgress({ phase, trackNumber: index + 1, trackCount: playable.length, fraction });
     };
+  };
 
-    const analyses = [];
-    for (const [index, track] of playable.entries()) {
-      const expectedFrames = (track.musicEndSec + FADE_OUT_SEC) * settings.sampleRate;
-      const onFrames = trackProgress('analysing', index, expectedFrames);
-      analyses.push(await analyseTrack(track, settings, onFrames, signal));
-      step++;
-    }
-
-    // Normalization target and limiter threshold: PEAK_CEILING (−0.5 dBFS). The margin below full scale absorbs
-    // the peak overshoot of lossy encoders, which would otherwise clip when the file is played:
-    // - EBU R 128 sets −1 dBTP for broadcast production, adding that "Permitted Maximum True Peak Levels may be lower for
-    //   different distribution systems and data reduction rates" (https://tech.ebu.ch/docs/r/r128v4_0.pdf)
-    // - EBU Tech 3344: "relatively low bitrates [...] in general cause a rise of overshoots. On high bitrates, a
-    //   higher limiter level might be possible" (https://tech.ebu.ch/docs/tech/tech3344.pdf)
-    // Measured on renders from this app (demo and two other files) normalized to −0.1 dB, then encoded and
-    // decoded: peaks rose by at most 0.2 dB (MP3 128–320 kbps, Opus 32–256 kbps, Vorbis q3–q10), so −0.5 dB is
-    // enough where −1 dB would cost loudness for nothing.
-    const maxPeak = Math.max(0, ...analyses.map((analysis) => analysis.peak));
-    const gainFor = (peak) => {
-      if (settings.normalize === null) return settings.volume;
-      const reference = settings.normalize === 'playlist' ? maxPeak : peak;
-      return reference > 0 ? PEAK_CEILING / reference : 1;
-    };
-
-    const spec = EXPORT_FORMATS[settings.format];
-    const usedNames = new Set();
-    const files = [];
-    const clippedTracks = [];
-    for (const [index, track] of playable.entries()) {
-      const analysis = analyses[index];
-      const gain = gainFor(analysis.peak);
-      const useLimiter = analysis.peak * gain > PEAK_CEILING;
-      if (useLimiter) clippedTracks.push(track.name);
-      const encoder = await AudioFileEncoder.create({ ...settings, title: track.name.replace(/\.[^.]*$/, '') });
-      try {
-        await encodeTrack(track, analysis, gain, useLimiter, settings, encoder,
-          trackProgress('encoding', index, analysis.frameCount), signal);
-        files.push({ name: outputFileName(track.name, spec.extension, usedNames), bytes: await encoder.finish() });
-      } finally {
-        await encoder.dispose();
-      }
-      step++;
-    }
-
-    const recommendedVolume = clippedTracks.length > 0 ? PEAK_CEILING / maxPeak : null;
-    return { files, skipped, clippedTracks, recommendedVolume };
-  } finally {
-    soundfont.close();
+  const analyses = [];
+  for (const [index, track] of playable.entries()) {
+    const expectedFrames = (track.musicEndSec + FADE_OUT_SEC) * settings.sampleRate;
+    const onFrames = trackProgress('analysing', index, expectedFrames);
+    analyses.push(await analyseTrack(track, settings, onFrames, signal));
+    step++;
   }
+
+  // Normalization target and limiter threshold: PEAK_CEILING (−0.5 dBFS). The margin below full scale absorbs
+  // the peak overshoot of lossy encoders, which would otherwise clip when the file is played:
+  // - EBU R 128 sets −1 dBTP for broadcast production, adding that "Permitted Maximum True Peak Levels may be lower for
+  //   different distribution systems and data reduction rates" (https://tech.ebu.ch/docs/r/r128v4_0.pdf)
+  // - EBU Tech 3344: "relatively low bitrates [...] in general cause a rise of overshoots. On high bitrates, a
+  //   higher limiter level might be possible" (https://tech.ebu.ch/docs/tech/tech3344.pdf)
+  // Measured on renders from this app (demo and two other files) normalized to −0.1 dB, then encoded and
+  // decoded: peaks rose by at most 0.2 dB (MP3 128–320 kbps, Opus 32–256 kbps, Vorbis q3–q10), so −0.5 dB is
+  // enough where −1 dB would cost loudness for nothing.
+  const maxPeak = Math.max(0, ...analyses.map((analysis) => analysis.peak));
+  const gainFor = (peak) => {
+    if (settings.normalize === null) return settings.volume;
+    const reference = settings.normalize === 'playlist' ? maxPeak : peak;
+    return reference > 0 ? PEAK_CEILING / reference : 1;
+  };
+
+  const spec = EXPORT_FORMATS[settings.format];
+  const usedNames = new Set();
+  const files = [];
+  const clippedTracks = [];
+  for (const [index, track] of playable.entries()) {
+    const analysis = analyses[index];
+    const gain = gainFor(analysis.peak);
+    const useLimiter = analysis.peak * gain > PEAK_CEILING;
+    if (useLimiter) clippedTracks.push(track.name);
+    const encoder = await AudioFileEncoder.create({ ...settings, title: track.name.replace(/\.[^.]*$/, '') });
+    try {
+      await encodeTrack(track, analysis, gain, useLimiter, settings, encoder,
+        trackProgress('encoding', index, analysis.frameCount), signal);
+      files.push({ name: outputFileName(track.name, spec.extension, usedNames), bytes: await encoder.finish() });
+    } finally {
+      await encoder.dispose();
+    }
+    step++;
+  }
+
+  const recommendedVolume = clippedTracks.length > 0 ? PEAK_CEILING / maxPeak : null;
+  return { files, skipped, clippedTracks, recommendedVolume };
 }
 
 /**
